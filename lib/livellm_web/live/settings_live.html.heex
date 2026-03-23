@@ -1,7 +1,7 @@
 <Layouts.chat flash={@flash}>
   <div class="flex h-full">
     <%!-- Sidebar --%>
-    <.sidebar current_page={:settings} conversations={@conversations} />
+    <.sidebar current_page={:settings} chats={@chats} current_chat_id={nil} />
 
     <%!-- Settings main area --%>
     <main id="settings-main" class="flex-1 overflow-y-auto bg-zinc-950">

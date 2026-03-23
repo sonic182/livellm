@@ -3,22 +3,15 @@ defmodule LivellmWeb.SettingsLive do
 
   import LivellmWeb.ChatComponents
 
+  alias Livellm.Chats
   alias Livellm.Config
   alias Livellm.Config.ProviderConfig
-
-  @conversations [
-    %{id: 1, title: "What is Elixir?", active: false},
-    %{id: 2, title: "Phoenix LiveView tutorial", active: false},
-    %{id: 3, title: "How to use Ecto associations", active: false},
-    %{id: 4, title: "Tailwind CSS v4 changes", active: false},
-    %{id: 5, title: "BEAM concurrency model", active: false}
-  ]
 
   def mount(_params, _session, socket) do
     {:ok,
      socket
      |> assign(:page_title, "Settings")
-     |> assign(:conversations, @conversations)
+     |> assign(:chats, Chats.list_chats())
      |> assign(:form, to_form(Config.change_provider_config(%ProviderConfig{})))
      |> stream(:provider_configs, Config.list_provider_configs())}
   end

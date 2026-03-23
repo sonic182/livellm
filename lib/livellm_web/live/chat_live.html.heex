@@ -1,7 +1,7 @@
 <Layouts.chat flash={@flash}>
   <div class="flex h-full">
     <%!-- Sidebar --%>
-    <.sidebar current_page={:chat} conversations={@conversations} />
+    <.sidebar current_page={:chat} chats={@chats} current_chat_id={@current_chat_id} />
 
     <%!-- Main chat area --%>
     <div class="flex flex-col flex-1 min-w-0">
@@ -10,7 +10,9 @@
         id="chat-header"
         class="flex items-center justify-between gap-4 px-6 py-3 border-b border-zinc-800 shrink-0 bg-zinc-950"
       >
-        <h1 class="text-sm font-medium text-zinc-400 shrink-0">New Chat</h1>
+        <h1 class="text-sm font-medium text-zinc-400 shrink-0 truncate">
+          {(@chat && @chat.title) || "New Chat"}
+        </h1>
 
         <%= if @provider_configs == [] do %>
           <.link
@@ -61,6 +63,23 @@
         <div id="messages" phx-update="stream" class="space-y-1">
           <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
         </div>
+
+        <%!-- Thinking indicator --%>
+        <%= if @waiting do %>
+          <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
+            <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+              <.icon name="hero-cpu-chip" class="size-4" />
+            </div>
+            <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
+              </span>
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
+              </span>
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
+              </span>
+            </div>
+          </div>
+        <% end %>
       </div>
 
       <%!-- Input bar --%>
@@ -68,20 +87,26 @@
         <form
           id="message-form"
           phx-submit="send_message"
-          class="flex items-end gap-3 bg-zinc-900 border border-zinc-700 rounded-2xl px-4 py-3 focus-within:border-zinc-500 transition-colors duration-150"
+          class={[
+            "flex items-end gap-3 bg-zinc-900 border rounded-2xl px-4 py-3 transition-colors duration-150",
+            @waiting && "border-zinc-800 opacity-60",
+            !@waiting && "border-zinc-700 focus-within:border-zinc-500"
+          ]}
         >
           <textarea
             id="message-input"
             name="message"
             rows="1"
-            placeholder="Message LiveLLM..."
-            class="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed"
+            placeholder={if @waiting, do: "Waiting for response...", else: "Message LiveLLM..."}
+            disabled={@waiting}
+            class="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed disabled:cursor-not-allowed"
             phx-hook=".AutoGrow"
           ></textarea>
           <button
             type="submit"
             id="send-btn"
-            class="size-8 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 flex items-center justify-center transition-colors duration-150 shrink-0"
+            disabled={@waiting}
+            class="size-8 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 flex items-center justify-center transition-colors duration-150 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <.icon name="hero-arrow-up" class="size-4 text-white" />
           </button>
