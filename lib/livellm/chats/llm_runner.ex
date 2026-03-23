@@ -19,6 +19,7 @@ defmodule Livellm.Chats.LlmRunner do
     opts = if config.base_url, do: Keyword.put(opts, :url, config.base_url), else: opts
     opts = maybe_add_reasoning(opts, config.provider, reasoning_effort)
     opts = maybe_add_cache_key(opts, config.provider, chat_id)
+    opts = maybe_add_previous_response_id(opts, config, model, history)
     opts = if run_opts[:stream], do: Keyword.put(opts, :stream_response, true), else: opts
 
     settings = %LlmComposer.Settings{
@@ -30,7 +31,7 @@ defmodule Livellm.Chats.LlmRunner do
     messages =
       Enum.map(history, fn msg ->
         %LlmComposer.Message{
-          type: String.to_existing_atom(msg.role),
+          type: message_type(msg.role),
           content: msg.content,
           reasoning: msg.reasoning,
           reasoning_details: msg.reasoning_details
@@ -78,4 +79,44 @@ defmodule Livellm.Chats.LlmRunner do
   end
 
   defp maybe_add_cache_key(opts, _provider, _chat_id), do: opts
+
+  defp maybe_add_previous_response_id(opts, %{provider: "openai_responses"}, model, history) do
+    previous_response_id = previous_response_id_for_openai_responses(history, model)
+
+    case previous_response_id do
+      id when is_binary(id) and id != "" -> Keyword.put(opts, :previous_response_id, id)
+      _ -> opts
+    end
+  end
+
+  defp maybe_add_previous_response_id(opts, _config, _model, _history), do: opts
+
+  @doc false
+  def previous_response_id_for_openai_responses(history, model) do
+    normalized_model = normalize_openai_responses_model(model)
+
+    history
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{role: "assistant", provider_name: "open_ai_responses"} = message ->
+        if normalize_openai_responses_model(message.provider_model) == normalized_model do
+          message.provider_response_id
+        end
+
+      _message ->
+        nil
+    end)
+  end
+
+  defp normalize_openai_responses_model(model) when is_binary(model) do
+    Regex.replace(~r/-\d{4}-\d{2}-\d{2}$/, model, "")
+  end
+
+  defp normalize_openai_responses_model(_model), do: nil
+
+  defp message_type("user"), do: :user
+  defp message_type("assistant"), do: :assistant
+  defp message_type("system"), do: :system
+  defp message_type("tool"), do: :tool_result
+  defp message_type(role) when is_binary(role), do: role
 end

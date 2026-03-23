@@ -291,7 +291,8 @@ defmodule LivellmWeb.ChatLive do
         role: "assistant",
         content: content,
         reasoning: blank_to_nil(reasoning),
-        reasoning_details: blank_list_to_nil(reasoning_details)
+        reasoning_details: blank_list_to_nil(reasoning_details),
+        raw_response: usage_raw
       }
       |> Map.merge(Usage.stream_cost_tracking_attrs(provider, usage, usage_raw))
 

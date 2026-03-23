@@ -13,6 +13,7 @@ defmodule Livellm.UsageTest do
         input_tokens: 10,
         output_tokens: 5,
         total_tokens: 15,
+        cached_tokens: 3,
         reasoning_tokens: 4,
         total_cost: Decimal.new("0.001000"),
         cost_currency: "USD"
@@ -22,6 +23,7 @@ defmodule Livellm.UsageTest do
         input_tokens: 20,
         output_tokens: 8,
         total_tokens: 28,
+        cached_tokens: 2,
         reasoning_tokens: 7,
         total_cost: Decimal.new("0.002500"),
         cost_currency: "USD"
@@ -33,6 +35,7 @@ defmodule Livellm.UsageTest do
     assert metrics.input_tokens == 30
     assert metrics.output_tokens == 13
     assert metrics.total_tokens == 43
+    assert metrics.cached_tokens == 5
     assert metrics.reasoning_tokens == 11
     assert Decimal.equal?(metrics.total_cost, Decimal.new("0.003500"))
     assert metrics.currency == "USD"
@@ -47,6 +50,7 @@ defmodule Livellm.UsageTest do
 
     priced_metrics = %{
       total_tokens: 48,
+      cached_tokens: 9,
       reasoning_tokens: 12,
       total_cost: Decimal.new("0.000056"),
       currency: "USD",
@@ -54,6 +58,7 @@ defmodule Livellm.UsageTest do
     }
 
     assert Usage.format_total_tokens(priced_metrics) == "48 tokens"
+    assert Usage.format_cached_tokens(priced_metrics) == "9 cached"
     assert Usage.format_reasoning_tokens(priced_metrics) == "12 reasoning"
     assert Usage.format_total_cost(priced_metrics) == "$0.000056"
   end
@@ -124,7 +129,8 @@ defmodule Livellm.UsageTest do
             "gpt-5.4-mini" => %{
               "cost" => %{
                 "input" => "0.250",
-                "output" => "2.000"
+                "output" => "2.000",
+                "cache_read" => "0.125"
               }
             }
           }
@@ -141,11 +147,13 @@ defmodule Livellm.UsageTest do
         %{input_tokens: 40, output_tokens: 54, total_tokens: 94},
         %{
           "response" => %{
+            "id" => "resp_123",
             "model" => "gpt-5.4-mini",
             "usage" => %{
               "input_tokens" => 40,
               "output_tokens" => 54,
               "total_tokens" => 94,
+              "input_tokens_details" => %{"cached_tokens" => 11},
               "output_tokens_details" => %{"reasoning_tokens" => 43}
             }
           }
@@ -155,13 +163,15 @@ defmodule Livellm.UsageTest do
     assert attrs.input_tokens == 40
     assert attrs.output_tokens == 54
     assert attrs.total_tokens == 94
+    assert attrs.cached_tokens == 11
     assert attrs.reasoning_tokens == 43
     assert attrs.provider_name == "open_ai_responses"
     assert attrs.provider_model == "gpt-5.4-mini"
+    assert attrs.provider_response_id == "resp_123"
     assert attrs.cost_currency == "USD"
-    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000010000000"))
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000008625000"))
     assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000108000000"))
-    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000118000000"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000116625000"))
   end
 
   test "stream_cost_tracking_attrs falls back from dated openai responses snapshot models" do
@@ -178,7 +188,8 @@ defmodule Livellm.UsageTest do
             "gpt-5.4-mini" => %{
               "cost" => %{
                 "input" => "0.250",
-                "output" => "2.000"
+                "output" => "2.000",
+                "cache_read" => "0.125"
               }
             }
           }
@@ -200,6 +211,7 @@ defmodule Livellm.UsageTest do
               "input_tokens" => 17,
               "output_tokens" => 33,
               "total_tokens" => 50,
+              "input_tokens_details" => %{"cached_tokens" => 6},
               "output_tokens_details" => %{"reasoning_tokens" => 26}
             }
           }
@@ -209,12 +221,13 @@ defmodule Livellm.UsageTest do
     assert attrs.input_tokens == 17
     assert attrs.output_tokens == 33
     assert attrs.total_tokens == 50
+    assert attrs.cached_tokens == 6
     assert attrs.reasoning_tokens == 26
     assert attrs.provider_model == "gpt-5.4-mini-2026-03-17"
     assert attrs.cost_currency == "USD"
-    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000004250000"))
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000003500000"))
     assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000066000000"))
-    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000070250000"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000069500000"))
   end
 
   test "stream_cost_tracking_attrs keeps tokens when open_ai_responses pricing is unavailable" do
@@ -244,6 +257,7 @@ defmodule Livellm.UsageTest do
     assert attrs.input_tokens == 12
     assert attrs.output_tokens == 8
     assert attrs.total_tokens == 20
+    assert attrs.cached_tokens == nil
     assert attrs.reasoning_tokens == 3
     assert attrs.provider_name == "open_ai_responses"
     assert attrs.provider_model == "unknown-openai-model"
@@ -251,5 +265,30 @@ defmodule Livellm.UsageTest do
     assert attrs.input_cost == nil
     assert attrs.output_cost == nil
     assert attrs.total_cost == nil
+  end
+
+  test "cost_tracking_attrs preserves cached tokens and provider response id from llm_response" do
+    llm_response = %LlmComposer.LlmResponse{
+      provider: :open_ai_responses,
+      response_id: "resp_999",
+      input_tokens: 100,
+      output_tokens: 25,
+      cached_tokens: 40,
+      raw: %{
+        "response" => %{
+          "id" => "resp_999",
+          "usage" => %{
+            "input_tokens_details" => %{"cached_tokens" => 40},
+            "output_tokens_details" => %{"reasoning_tokens" => 8}
+          }
+        }
+      }
+    }
+
+    attrs = Usage.cost_tracking_attrs(llm_response)
+
+    assert attrs.cached_tokens == 40
+    assert attrs.reasoning_tokens == 8
+    assert attrs.provider_response_id == "resp_999"
   end
 end

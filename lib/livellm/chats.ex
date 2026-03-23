@@ -46,4 +46,13 @@ defmodule Livellm.Chats do
     |> Message.changeset(attrs)
     |> Repo.insert()
   end
+
+  def latest_assistant_message(%Chat{} = chat) do
+    Repo.one(
+      from m in Message,
+        where: m.chat_id == ^chat.id and m.role == "assistant",
+        order_by: [desc: m.inserted_at, desc: m.id],
+        limit: 1
+    )
+  end
 end
