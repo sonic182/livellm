@@ -6,11 +6,8 @@ defmodule Livellm.Chats.LlmRunner do
   prompt caching), and dispatches to the appropriate LlmComposer provider.
   """
 
-  alias Livellm.Chats.Message
-  alias Livellm.Config.ProviderConfig
-
-  @spec run(ProviderConfig.t() | nil, String.t(), [Message.t()], String.t() | nil, integer()) ::
-          {:ok, LlmComposer.LlmResponse.t()} | {:error, term()}
+  @spec run(map() | nil, String.t(), [map()], String.t() | nil, integer()) ::
+          {:ok, map()} | {:error, term()}
 
   def run(nil, _model, _history, _effort, _chat_id), do: {:error, :no_provider}
   def run(_config, "", _history, _effort, _chat_id), do: {:error, :no_model}
