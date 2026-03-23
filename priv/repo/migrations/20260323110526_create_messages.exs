@@ -6,7 +6,7 @@ defmodule Livellm.Repo.Migrations.CreateMessages do
       add :role, :string, null: false
       add :content, :string
       add :reasoning, :string
-      add :reasoning_details, :map
+      add :reasoning_details, {:array, :map}
       add :raw_response, :map
       add :provider_messages, :map
       add :chat_id, references(:chats, on_delete: :delete_all), null: false

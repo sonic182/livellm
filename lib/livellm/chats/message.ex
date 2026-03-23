@@ -8,7 +8,7 @@ defmodule Livellm.Chats.Message do
     field :role, :string
     field :content, :string
     field :reasoning, :string
-    field :reasoning_details, :map
+    field :reasoning_details, {:array, :map}
     field :raw_response, :map
     field :provider_messages, :map
     belongs_to :chat, Chat

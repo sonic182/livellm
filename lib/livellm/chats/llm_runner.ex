@@ -25,7 +25,14 @@ defmodule Livellm.Chats.LlmRunner do
     }
 
     messages =
-      Enum.map(history, &LlmComposer.Message.new(String.to_existing_atom(&1.role), &1.content))
+      Enum.map(history, fn msg ->
+        %LlmComposer.Message{
+          type: String.to_existing_atom(msg.role),
+          content: msg.content,
+          reasoning: msg.reasoning,
+          reasoning_details: msg.reasoning_details
+        }
+      end)
 
     LlmComposer.run_completion(settings, messages)
   end

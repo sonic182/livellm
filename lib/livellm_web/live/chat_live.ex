@@ -152,12 +152,15 @@ defmodule LivellmWeb.ChatLive do
   end
 
   def handle_info({:llm_response, chat, {:ok, llm_response}}, socket) do
-    content = llm_response.main_response.content
+    %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
+      llm_response.main_response
 
     {:ok, assistant_msg} =
       Chats.create_message(chat, %{
         role: "assistant",
         content: content,
+        reasoning: reasoning,
+        reasoning_details: reasoning_details,
         raw_response: llm_response.raw
       })
 
