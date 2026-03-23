@@ -1,7 +1,7 @@
 <Layouts.chat flash={@flash}>
   <div class="flex h-full">
     <%!-- Sidebar --%>
-    <.sidebar current_page={:settings} conversations={@conversations} />
+    <.sidebar current_page={:settings} chats={@chats} current_chat_id={nil} />
 
     <%!-- Settings main area --%>
     <main id="settings-main" class="flex-1 overflow-y-auto bg-zinc-950">
@@ -11,21 +11,145 @@
           <p class="text-sm text-zinc-400">Manage your LiveLLM preferences and configuration.</p>
         </div>
 
-        <%!-- Placeholder sections --%>
         <div id="settings-sections" class="space-y-6">
+          <%!-- General placeholder --%>
           <div id="settings-general" class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 class="text-sm font-semibold text-zinc-200 mb-1">General</h2>
             <p class="text-xs text-zinc-500">General settings will appear here.</p>
           </div>
 
+          <%!-- Models placeholder --%>
           <div id="settings-models" class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 class="text-sm font-semibold text-zinc-200 mb-1">Models</h2>
             <p class="text-xs text-zinc-500">Model configuration will appear here.</p>
           </div>
 
-          <div id="settings-connections" class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-            <h2 class="text-sm font-semibold text-zinc-200 mb-1">Connections</h2>
-            <p class="text-xs text-zinc-500">API connection settings will appear here.</p>
+          <%!-- Connections — provider configs --%>
+          <div
+            id="settings-connections"
+            class="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-6"
+          >
+            <div>
+              <h2 class="text-sm font-semibold text-zinc-200 mb-1">Connections</h2>
+              <p class="text-xs text-zinc-500">Configure your LLM provider API credentials.</p>
+            </div>
+
+            <%!-- Existing configs list --%>
+            <div id="provider-configs-list" phx-update="stream" class="space-y-2">
+              <div
+                :for={{id, config} <- @streams.provider_configs}
+                id={id}
+                class="flex items-center justify-between gap-4 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3"
+              >
+                <div class="flex items-center gap-3 min-w-0">
+                  <%!-- Provider badge --%>
+                  <span class="shrink-0 rounded-md bg-violet-900/50 border border-violet-700/50 px-2 py-0.5 text-xs font-medium text-violet-300 uppercase tracking-wide">
+                    {config.provider}
+                  </span>
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-zinc-100 truncate">{config.label}</p>
+                    <p class="text-xs text-zinc-500 truncate">
+                      {config.default_model || "No default model"}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2 shrink-0">
+                  <%!-- Enabled indicator --%>
+                  <%= if config.enabled do %>
+                    <span class="flex items-center gap-1 text-xs text-emerald-400">
+                      <span class="size-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                      Active
+                    </span>
+                  <% else %>
+                    <button
+                      phx-click="enable_config"
+                      phx-value-id={config.id}
+                      id={"enable-#{config.id}"}
+                      class="text-xs text-zinc-400 hover:text-zinc-100 transition-colors"
+                    >
+                      Set active
+                    </button>
+                  <% end %>
+
+                  <button
+                    phx-click="delete_config"
+                    phx-value-id={config.id}
+                    id={"delete-#{config.id}"}
+                    data-confirm="Delete this provider config?"
+                    class="rounded-lg p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors"
+                  >
+                    <.icon name="hero-trash" class="size-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <%!-- Add provider form --%>
+            <div class="border-t border-zinc-700 pt-6">
+              <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">
+                Add Provider
+              </h3>
+              <.form
+                for={@form}
+                id="provider-config-form"
+                phx-submit="save_config"
+                class="space-y-4"
+              >
+                <div class="grid grid-cols-2 gap-4">
+                  <.input
+                    field={@form[:provider]}
+                    type="select"
+                    label="Provider"
+                    options={[
+                      {"OpenAI (Chat Completions)", "openai"},
+                      {"OpenAI (Responses API)", "openai_responses"},
+                      {"OpenRouter", "openrouter"},
+                      {"Ollama", "ollama"},
+                      {"Google", "google"}
+                    ]}
+                  />
+                  <.input
+                    field={@form[:label]}
+                    type="text"
+                    label="Label"
+                    placeholder="e.g. My OpenAI"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <.input
+                    field={@form[:default_model]}
+                    type="text"
+                    label="Default Model (optional)"
+                    placeholder="e.g. gpt-4.1-mini"
+                  />
+                  <.input
+                    field={@form[:api_key]}
+                    type="password"
+                    label="API Key"
+                    placeholder="sk-..."
+                  />
+                </div>
+
+                <.input
+                  field={@form[:base_url]}
+                  type="text"
+                  label="Base URL (optional)"
+                  placeholder="https://api.openai.com/v1"
+                />
+
+                <div class="flex justify-end">
+                  <button
+                    type="submit"
+                    id="save-config-btn"
+                    class="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-sm font-medium text-white transition-colors"
+                  >
+                    Save
+                  </button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
       </div>

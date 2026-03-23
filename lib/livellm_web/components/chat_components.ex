@@ -9,7 +9,8 @@ defmodule LivellmWeb.ChatComponents do
   Renders the sidebar with conversation list, new chat button, and settings link.
   """
   attr :current_page, :atom, required: true, doc: "current page: :chat or :settings"
-  attr :conversations, :list, required: true, doc: "list of conversation maps"
+  attr :chats, :list, required: true, doc: "list of Chat structs"
+  attr :current_chat_id, :any, default: nil, doc: "id of the currently active chat"
 
   def sidebar(assigns) do
     ~H"""
@@ -36,22 +37,26 @@ defmodule LivellmWeb.ChatComponents do
         </.link>
       </div>
 
-      <%!-- Conversations list --%>
-      <nav id="conversations-nav" class="flex-1 overflow-y-auto px-3 py-2">
+      <%!-- Chats list --%>
+      <nav id="chats-nav" class="flex-1 overflow-y-auto px-3 py-2">
         <p class="px-3 py-2 text-xs font-medium text-zinc-500 uppercase tracking-wider">Recent</p>
-        <%= for conv <- @conversations do %>
-          <.link
-            navigate={~p"/"}
-            id={"conv-#{conv.id}"}
-            class={[
-              "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150",
-              conv.active && "bg-zinc-800 text-zinc-100",
-              !conv.active && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-            ]}
-          >
-            <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0" />
-            <span class="truncate">{conv.title}</span>
-          </.link>
+        <%= if @chats == [] do %>
+          <p class="px-3 py-2 text-xs text-zinc-600 italic">No chats yet</p>
+        <% else %>
+          <%= for chat <- @chats do %>
+            <.link
+              navigate={~p"/chats/#{chat.id}"}
+              id={"chat-#{chat.id}"}
+              class={[
+                "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150",
+                chat.id == @current_chat_id && "bg-zinc-800 text-zinc-100",
+                chat.id != @current_chat_id && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              ]}
+            >
+              <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0" />
+              <span class="truncate">{chat.title}</span>
+            </.link>
+          <% end %>
         <% end %>
       </nav>
 
@@ -86,16 +91,16 @@ defmodule LivellmWeb.ChatComponents do
       id={@id}
       class={[
         "flex gap-3 px-6 py-3 group",
-        @message.role == :user && "flex-row-reverse"
+        @message.role == "user" && "flex-row-reverse"
       ]}
     >
       <%!-- Avatar --%>
       <div class={[
         "size-8 rounded-full shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5",
-        @message.role == :assistant && "bg-violet-700 text-white",
-        @message.role == :user && "bg-zinc-700 text-zinc-300"
+        @message.role == "assistant" && "bg-violet-700 text-white",
+        @message.role == "user" && "bg-zinc-700 text-zinc-300"
       ]}>
-        <%= if @message.role == :assistant do %>
+        <%= if @message.role == "assistant" do %>
           <.icon name="hero-cpu-chip" class="size-4" />
         <% else %>
           <span>U</span>
@@ -105,8 +110,8 @@ defmodule LivellmWeb.ChatComponents do
       <%!-- Bubble --%>
       <div class={[
         "max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
-        @message.role == :assistant && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
-        @message.role == :user && "bg-violet-600 text-white rounded-tr-sm"
+        @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
+        @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
       ]}>
         {@message.content}
       </div>

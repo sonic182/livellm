@@ -1,16 +1,72 @@
 <Layouts.chat flash={@flash}>
   <div class="flex h-full">
     <%!-- Sidebar --%>
-    <.sidebar current_page={:chat} conversations={@conversations} />
+    <.sidebar current_page={:chat} chats={@chats} current_chat_id={@current_chat_id} />
 
     <%!-- Main chat area --%>
     <div class="flex flex-col flex-1 min-w-0">
       <%!-- Chat header --%>
       <header
         id="chat-header"
-        class="flex items-center px-6 py-4 border-b border-zinc-800 shrink-0 bg-zinc-950"
+        class="flex items-center justify-between gap-4 px-6 py-3 border-b border-zinc-800 shrink-0 bg-zinc-950"
       >
-        <h1 class="text-sm font-medium text-zinc-300 truncate">What is Elixir?</h1>
+        <h1 class="text-sm font-medium text-zinc-400 shrink-0 truncate">
+          {(@chat && @chat.title) || "New Chat"}
+        </h1>
+
+        <%= if @provider_configs == [] do %>
+          <.link
+            navigate={~p"/settings"}
+            id="no-providers-link"
+            class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            No providers configured — go to Settings
+          </.link>
+        <% else %>
+          <form
+            id="chat-settings-form"
+            phx-change="update_chat_settings"
+            phx-hook=".ChatSettings"
+            data-chat-id={@current_chat_id}
+            class="flex items-center gap-2"
+          >
+            <select
+              id="provider-select"
+              name="provider_id"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+            >
+              <option value="">Select provider...</option>
+              <%= for p <- @provider_configs do %>
+                <option value={p.id} selected={@selected_provider_id == p.id}>
+                  {p.label} ({p.provider})
+                </option>
+              <% end %>
+            </select>
+
+            <input
+              id="model-input"
+              type="text"
+              name="model"
+              value={@selected_model}
+              placeholder="Model..."
+              phx-debounce="300"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors w-44"
+            />
+
+            <select
+              id="reasoning-effort-select"
+              name="reasoning_effort"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+            >
+              <option value="">No reasoning</option>
+              <%= for effort <- ~w(minimal low medium high xhigh) do %>
+                <option value={effort} selected={@selected_reasoning_effort == effort}>
+                  {effort}
+                </option>
+              <% end %>
+            </select>
+          </form>
+        <% end %>
       </header>
 
       <%!-- Messages scroll area --%>
@@ -22,6 +78,23 @@
         <div id="messages" phx-update="stream" class="space-y-1">
           <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
         </div>
+
+        <%!-- Thinking indicator --%>
+        <%= if @waiting do %>
+          <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
+            <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+              <.icon name="hero-cpu-chip" class="size-4" />
+            </div>
+            <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
+              </span>
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
+              </span>
+              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
+              </span>
+            </div>
+          </div>
+        <% end %>
       </div>
 
       <%!-- Input bar --%>
@@ -29,20 +102,26 @@
         <form
           id="message-form"
           phx-submit="send_message"
-          class="flex items-end gap-3 bg-zinc-900 border border-zinc-700 rounded-2xl px-4 py-3 focus-within:border-zinc-500 transition-colors duration-150"
+          class={[
+            "flex items-end gap-3 bg-zinc-900 border rounded-2xl px-4 py-3 transition-colors duration-150",
+            @waiting && "border-zinc-800 opacity-60",
+            !@waiting && "border-zinc-700 focus-within:border-zinc-500"
+          ]}
         >
           <textarea
             id="message-input"
             name="message"
             rows="1"
-            placeholder="Message LiveLLM..."
-            class="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed"
+            placeholder={if @waiting, do: "Waiting for response...", else: "Message LiveLLM..."}
+            disabled={@waiting}
+            class="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed disabled:cursor-not-allowed"
             phx-hook=".AutoGrow"
           ></textarea>
           <button
             type="submit"
             id="send-btn"
-            class="size-8 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 flex items-center justify-center transition-colors duration-150 shrink-0"
+            disabled={@waiting}
+            class="size-8 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 flex items-center justify-center transition-colors duration-150 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <.icon name="hero-arrow-up" class="size-4 text-white" />
           </button>
@@ -54,6 +133,34 @@
     </div>
   </div>
 
+  <%!-- Persist chat settings (provider, model, reasoning effort) per chat in localStorage --%>
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatSettings">
+    const key = (chatId) => `livellm:chat_settings:${chatId || "new"}`
+    export default {
+      chatId() { return this.el.dataset.chatId || "new" },
+      mounted() {
+        this.handleEvent("save_chat_settings", (settings) => {
+          localStorage.setItem(key(this.chatId()), JSON.stringify(settings))
+        })
+        this._lastChatId = this.chatId()
+        this.restore(this.chatId())
+      },
+      updated() {
+        const currentChatId = this.chatId()
+        if (currentChatId !== this._lastChatId) {
+          this._lastChatId = currentChatId
+          this.restore(currentChatId)
+        }
+      },
+      restore(chatId) {
+        const saved = localStorage.getItem(key(chatId))
+        if (saved) {
+          try { this.pushEvent("restore_chat_settings", JSON.parse(saved)) } catch (_) {}
+        }
+      }
+    }
+  </script>
+
   <%!-- Auto-grow textarea hook --%>
   <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoGrow">
     export default {
@@ -61,6 +168,12 @@
         this.el.addEventListener("input", () => {
           this.el.style.height = "auto"
           this.el.style.height = this.el.scrollHeight + "px"
+        })
+        this.el.addEventListener("keydown", (e) => {
+          if (e.ctrlKey && e.key === "Enter") {
+            e.preventDefault()
+            this.el.closest("form").requestSubmit()
+          }
         })
       }
     }

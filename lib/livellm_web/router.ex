@@ -18,7 +18,8 @@ defmodule LivellmWeb.Router do
     pipe_through :browser
 
     live_session :default do
-      live "/", ChatLive
+      live "/", ChatLive, :new
+      live "/chats/:id", ChatLive, :show
       live "/settings", SettingsLive
     end
   end
