@@ -151,6 +151,16 @@ defmodule Livellm.Usage do
        when is_integer(reasoning_tokens),
        do: reasoning_tokens
 
+  defp reasoning_tokens(_usage, %{
+         "response" => %{
+           "usage" => %{
+             "output_tokens_details" => %{"reasoning_tokens" => reasoning_tokens}
+           }
+         }
+       })
+       when is_integer(reasoning_tokens),
+       do: reasoning_tokens
+
   defp reasoning_tokens(_usage, _raw), do: nil
 
   defp cost_value(nil, _field), do: nil
@@ -161,6 +171,7 @@ defmodule Livellm.Usage do
   defp provider_name(cost_info, _provider), do: to_string(cost_info.provider_name)
 
   defp provider_model(nil, %{"model" => model}) when is_binary(model), do: model
+  defp provider_model(nil, %{"response" => %{"model" => model}}) when is_binary(model), do: model
   defp provider_model(nil, _raw), do: nil
   defp provider_model(cost_info, _raw), do: cost_info.provider_model
 
@@ -185,6 +196,19 @@ defmodule Livellm.Usage do
     end
   end
 
+  defp stream_cost_info(:open_ai_responses, usage, %{"response" => %{"model" => model}})
+       when is_map(usage) and is_binary(model) do
+    pricing = Pricing.fetch_pricing(:open_ai_responses, model: model)
+
+    CostInfo.new(
+      :open_ai_responses,
+      model,
+      usage.input_tokens || 0,
+      usage.output_tokens || 0,
+      pricing || []
+    )
+  end
+
   defp stream_cost_info(_provider, _usage, _raw_chunk), do: nil
 
   defp stream_provider_name(_provider, cost_info, _raw_chunk) when not is_nil(cost_info),
@@ -203,5 +227,10 @@ defmodule Livellm.Usage do
     do: cost_info.provider_model
 
   defp stream_provider_model(_cost_info, %{"model" => model}) when is_binary(model), do: model
+
+  defp stream_provider_model(_cost_info, %{"response" => %{"model" => model}})
+       when is_binary(model),
+       do: model
+
   defp stream_provider_model(_cost_info, _raw_chunk), do: nil
 end

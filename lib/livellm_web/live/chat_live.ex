@@ -328,6 +328,22 @@ defmodule LivellmWeb.ChatLive do
     %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
   end
 
+  defp handle_stream_chunk(%{type: :done, usage: usage} = chunk, acc, pid, chat)
+       when not is_nil(usage) do
+    acc =
+      if (chunk.reasoning || "") != "" or (chunk.reasoning_details || []) != [] do
+        handle_stream_chunk(%{chunk | type: :reasoning_delta}, acc, pid, chat)
+      else
+        acc
+      end
+
+    Logger.debug(
+      "[chat_live] stream done-with-usage chat_id=#{chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
+    )
+
+    %{acc | usage: chunk.usage, usage_raw: chunk.raw}
+  end
+
   defp handle_stream_chunk(%{type: :usage} = chunk, acc, _pid, chat) do
     Logger.debug(
       "[chat_live] stream usage chat_id=#{chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"

@@ -109,4 +109,147 @@ defmodule Livellm.UsageTest do
     assert Decimal.equal?(attrs.output_cost, Decimal.new("0.0005664000000"))
     assert Decimal.equal?(attrs.total_cost, Decimal.new("0.0005754000000"))
   end
+
+  test "stream_cost_tracking_attrs derives open_ai_responses pricing from final completed chunk" do
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put(
+      "models_dev_api",
+      %{
+        "openai" => %{
+          "models" => %{
+            "gpt-5.4-mini" => %{
+              "cost" => %{
+                "input" => "0.250",
+                "output" => "2.000"
+              }
+            }
+          }
+        }
+      },
+      60
+    )
+
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    attrs =
+      Usage.stream_cost_tracking_attrs(
+        :open_ai_responses,
+        %{input_tokens: 40, output_tokens: 54, total_tokens: 94},
+        %{
+          "response" => %{
+            "model" => "gpt-5.4-mini",
+            "usage" => %{
+              "input_tokens" => 40,
+              "output_tokens" => 54,
+              "total_tokens" => 94,
+              "output_tokens_details" => %{"reasoning_tokens" => 43}
+            }
+          }
+        }
+      )
+
+    assert attrs.input_tokens == 40
+    assert attrs.output_tokens == 54
+    assert attrs.total_tokens == 94
+    assert attrs.reasoning_tokens == 43
+    assert attrs.provider_name == "open_ai_responses"
+    assert attrs.provider_model == "gpt-5.4-mini"
+    assert attrs.cost_currency == "USD"
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000010000000"))
+    assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000108000000"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000118000000"))
+  end
+
+  test "stream_cost_tracking_attrs falls back from dated openai responses snapshot models" do
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put(
+      "models_dev_api",
+      %{
+        "openai" => %{
+          "models" => %{
+            "gpt-5.4-mini" => %{
+              "cost" => %{
+                "input" => "0.250",
+                "output" => "2.000"
+              }
+            }
+          }
+        }
+      },
+      60
+    )
+
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    attrs =
+      Usage.stream_cost_tracking_attrs(
+        :open_ai_responses,
+        %{input_tokens: 17, output_tokens: 33, total_tokens: 50},
+        %{
+          "response" => %{
+            "model" => "gpt-5.4-mini-2026-03-17",
+            "usage" => %{
+              "input_tokens" => 17,
+              "output_tokens" => 33,
+              "total_tokens" => 50,
+              "output_tokens_details" => %{"reasoning_tokens" => 26}
+            }
+          }
+        }
+      )
+
+    assert attrs.input_tokens == 17
+    assert attrs.output_tokens == 33
+    assert attrs.total_tokens == 50
+    assert attrs.reasoning_tokens == 26
+    assert attrs.provider_model == "gpt-5.4-mini-2026-03-17"
+    assert attrs.cost_currency == "USD"
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000004250000"))
+    assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000066000000"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000070250000"))
+  end
+
+  test "stream_cost_tracking_attrs keeps tokens when open_ai_responses pricing is unavailable" do
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("models_dev_api", %{"openai" => %{"models" => %{}}}, 60)
+
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    attrs =
+      Usage.stream_cost_tracking_attrs(
+        :open_ai_responses,
+        %{input_tokens: 12, output_tokens: 8, total_tokens: 20},
+        %{
+          "response" => %{
+            "model" => "unknown-openai-model",
+            "usage" => %{
+              "output_tokens_details" => %{"reasoning_tokens" => 3}
+            }
+          }
+        }
+      )
+
+    assert attrs.input_tokens == 12
+    assert attrs.output_tokens == 8
+    assert attrs.total_tokens == 20
+    assert attrs.reasoning_tokens == 3
+    assert attrs.provider_name == "open_ai_responses"
+    assert attrs.provider_model == "unknown-openai-model"
+    assert attrs.cost_currency == nil
+    assert attrs.input_cost == nil
+    assert attrs.output_cost == nil
+    assert attrs.total_cost == nil
+  end
 end
