@@ -14,6 +14,7 @@ defmodule Livellm.Chats.Message do
     field :input_tokens, :integer
     field :output_tokens, :integer
     field :total_tokens, :integer
+    field :reasoning_tokens, :integer
     field :input_cost, :decimal
     field :output_cost, :decimal
     field :total_cost, :decimal
@@ -35,6 +36,7 @@ defmodule Livellm.Chats.Message do
     :input_tokens,
     :output_tokens,
     :total_tokens,
+    :reasoning_tokens,
     :input_cost,
     :output_cost,
     :total_cost,

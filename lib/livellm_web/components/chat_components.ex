@@ -120,12 +120,42 @@ defmodule LivellmWeb.ChatComponents do
       </div>
 
       <%!-- Bubble --%>
-      <div class={[
-        "max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
-        @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
-        @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
-      ]}>
-        {@message.content}
+      <div class="max-w-[72%] space-y-2">
+        <%= if @message.role == "assistant" and
+              ((is_binary(@message.reasoning) and @message.reasoning != "") or
+                 ((@message.reasoning_tokens || 0) > 0)) do %>
+          <details
+            id={"#{@id}-reasoning"}
+            class="rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+          >
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
+              <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                Thinking
+              </span>
+              <%= if (@message.reasoning_tokens || 0) > 0 do %>
+                <span
+                  id={"#{@id}-reasoning-tokens"}
+                  class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-200"
+                >
+                  {@message.reasoning_tokens} reasoning
+                </span>
+              <% end %>
+            </summary>
+            <%= if is_binary(@message.reasoning) and @message.reasoning != "" do %>
+              <div id={"#{@id}-reasoning-content"} class="mt-3 whitespace-pre-wrap leading-relaxed">
+                {@message.reasoning}
+              </div>
+            <% end %>
+          </details>
+        <% end %>
+
+        <div class={[
+          "rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
+          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
+        ]}>
+          {@message.content}
+        </div>
       </div>
     </div>
     """

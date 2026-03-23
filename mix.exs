@@ -47,6 +47,7 @@ defmodule Livellm.MixProject do
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, ">= 0.0.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
+      {:finch, "~> 0.21.0"},
       {:gettext, "~> 1.0"},
       {:heroicons,
        github: "tailwindlabs/heroicons",

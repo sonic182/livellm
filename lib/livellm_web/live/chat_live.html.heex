@@ -32,6 +32,15 @@
                   {cost_label}
                 </span>
               <% end %>
+
+              <%= if reasoning_label = Usage.format_reasoning_tokens(@chat_metrics) do %>
+                <span
+                  id="chat-reasoning-tokens"
+                  class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-200"
+                >
+                  {reasoning_label}
+                </span>
+              <% end %>
             </div>
           <% end %>
         </div>
@@ -87,6 +96,20 @@
                 </option>
               <% end %>
             </select>
+
+            <label
+              id="streaming-label"
+              class="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none"
+            >
+              <input
+                id="streaming-toggle"
+                type="checkbox"
+                name="streaming"
+                value="true"
+                checked={@streaming}
+                class="accent-violet-500 cursor-pointer"
+              /> Stream
+            </label>
           </form>
         <% end %>
       </header>
@@ -101,21 +124,48 @@
           <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
         </div>
 
-        <%!-- Thinking indicator --%>
-        <%= if @waiting do %>
-          <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
-            <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
-              <.icon name="hero-cpu-chip" class="size-4" />
+        <%!-- Streaming / thinking indicator --%>
+        <%= if not is_nil(@streaming_reasoning) do %>
+          <div id="streaming-reasoning" class="flex gap-3 px-6 py-2">
+            <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-amber-600/80 text-white mt-0.5">
+              <.icon name="hero-light-bulb" class="size-4" />
             </div>
-            <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
-              </span>
-              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
-              </span>
-              <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
-              </span>
+            <div class="max-w-[72%] rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
+              <div class="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                <span>Thinking</span>
+              </div>
+              <div id="streaming-reasoning-content" class="whitespace-pre-wrap">
+                {@streaming_reasoning}<span class="inline-block w-0.5 h-4 bg-amber-200/60 animate-pulse ml-0.5 align-middle"></span>
+              </div>
             </div>
           </div>
+        <% end %>
+
+        <%= cond do %>
+          <% not is_nil(@streaming_content) -> %>
+            <div id="streaming-message" class="flex gap-3 px-6 py-3">
+              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+                <.icon name="hero-cpu-chip" class="size-4" />
+              </div>
+              <div class="max-w-[72%] bg-zinc-800 text-zinc-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
+                {@streaming_content}<span class="inline-block w-0.5 h-4 bg-zinc-400 animate-pulse ml-0.5 align-middle"></span>
+              </div>
+            </div>
+          <% @waiting -> %>
+            <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
+              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+                <.icon name="hero-cpu-chip" class="size-4" />
+              </div>
+              <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
+                </span>
+                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
+                </span>
+                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
+                </span>
+              </div>
+            </div>
+          <% true -> %>
         <% end %>
       </div>
 

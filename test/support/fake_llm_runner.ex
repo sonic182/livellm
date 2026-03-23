@@ -5,7 +5,7 @@ defmodule Livellm.TestSupport.FakeLlmRunner do
 
   alias LlmComposer.LlmResponse
 
-  def run(provider_config, model, history, reasoning_effort, chat_id) do
+  def run(provider_config, model, history, reasoning_effort, chat_id, _opts \\ []) do
     notify_test_process(provider_config, model, history, reasoning_effort, chat_id)
 
     case Application.fetch_env(:livellm, :llm_runner_result) do
