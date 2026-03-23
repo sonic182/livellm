@@ -8,9 +8,48 @@
       <%!-- Chat header --%>
       <header
         id="chat-header"
-        class="flex items-center px-6 py-4 border-b border-zinc-800 shrink-0 bg-zinc-950"
+        class="flex items-center justify-between gap-4 px-6 py-3 border-b border-zinc-800 shrink-0 bg-zinc-950"
       >
-        <h1 class="text-sm font-medium text-zinc-300 truncate">What is Elixir?</h1>
+        <h1 class="text-sm font-medium text-zinc-400 shrink-0">New Chat</h1>
+
+        <%= if @provider_configs == [] do %>
+          <.link
+            navigate={~p"/settings"}
+            id="no-providers-link"
+            class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            No providers configured — go to Settings
+          </.link>
+        <% else %>
+          <form
+            id="chat-settings-form"
+            phx-change="update_chat_settings"
+            class="flex items-center gap-2"
+          >
+            <select
+              id="provider-select"
+              name="provider_id"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+            >
+              <option value="">Select provider...</option>
+              <%= for p <- @provider_configs do %>
+                <option value={p.id} selected={@selected_provider_id == p.id}>
+                  {p.label} ({p.provider})
+                </option>
+              <% end %>
+            </select>
+
+            <input
+              id="model-input"
+              type="text"
+              name="model"
+              value={@selected_model}
+              placeholder="Model..."
+              phx-debounce="300"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors w-44"
+            />
+          </form>
+        <% end %>
       </header>
 
       <%!-- Messages scroll area --%>

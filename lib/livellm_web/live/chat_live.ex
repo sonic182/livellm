@@ -3,6 +3,8 @@ defmodule LivellmWeb.ChatLive do
 
   import LivellmWeb.ChatComponents
 
+  alias Livellm.Config
+
   @conversations [
     %{id: 1, title: "What is Elixir?", active: true},
     %{id: 2, title: "Phoenix LiveView tutorial", active: false},
@@ -12,22 +14,14 @@ defmodule LivellmWeb.ChatLive do
   ]
 
   @messages [
-    %{
-      id: 1,
-      role: :user,
-      content: "What is Elixir and why should I use it?"
-    },
+    %{id: 1, role: :user, content: "What is Elixir and why should I use it?"},
     %{
       id: 2,
       role: :assistant,
       content:
         "Elixir is a dynamic, functional language built on the Erlang VM (BEAM). It excels at building scalable, fault-tolerant distributed systems with excellent concurrency primitives. If you need high availability, low latency, or real-time features, Elixir is a fantastic choice."
     },
-    %{
-      id: 3,
-      role: :user,
-      content: "How does Phoenix LiveView work?"
-    },
+    %{id: 3, role: :user, content: "How does Phoenix LiveView work?"},
     %{
       id: 4,
       role: :assistant,
@@ -37,11 +31,46 @@ defmodule LivellmWeb.ChatLive do
   ]
 
   def mount(_params, _session, socket) do
+    provider_configs = Config.list_provider_configs()
+    enabled = Enum.find(provider_configs, & &1.enabled)
+
     {:ok,
      socket
      |> assign(:page_title, "Chat")
      |> assign(:conversations, @conversations)
+     |> assign(:provider_configs, provider_configs)
+     |> assign(:selected_provider_id, enabled && enabled.id)
+     |> assign(:selected_model, (enabled && enabled.default_model) || "")
      |> stream(:messages, @messages)}
+  end
+
+  def handle_event("update_chat_settings", params, socket) do
+    provider_id = params["provider_id"]
+    current_provider_id = socket.assigns.selected_provider_id
+
+    new_provider_id =
+      case provider_id do
+        "" -> nil
+        id -> String.to_integer(id)
+      end
+
+    selected_model =
+      cond do
+        provider_id == "" ->
+          ""
+
+        new_provider_id != current_provider_id ->
+          config = Enum.find(socket.assigns.provider_configs, &(&1.id == new_provider_id))
+          (config && config.default_model) || ""
+
+        true ->
+          params["model"] || socket.assigns.selected_model
+      end
+
+    {:noreply,
+     socket
+     |> assign(:selected_provider_id, new_provider_id)
+     |> assign(:selected_model, selected_model)}
   end
 
   def handle_event("send_message", _params, socket) do
