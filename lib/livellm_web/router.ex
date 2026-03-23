@@ -17,7 +17,10 @@ defmodule LivellmWeb.Router do
   scope "/", LivellmWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live_session :default do
+      live "/", ChatLive
+      live "/settings", SettingsLive
+    end
   end
 
   # Other scopes may use custom stacks.

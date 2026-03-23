@@ -1,8 +1,8 @@
 defmodule LivellmWeb.PageControllerTest do
   use LivellmWeb.ConnCase
 
-  test "GET /", %{conn: conn} do
+  test "GET / renders chat interface", %{conn: conn} do
     conn = get(conn, ~p"/")
-    assert html_response(conn, 200) =~ "Peace of mind from prototype to production"
+    assert html_response(conn, 200) =~ "LiveLLM"
   end
 end
