@@ -21,7 +21,8 @@ defmodule Livellm.Chats.LlmRunner do
 
     settings = %LlmComposer.Settings{
       providers: [{provider_mod, opts}],
-      system_prompt: "You are a helpful assistant."
+      system_prompt: "You are a helpful assistant.",
+      track_costs: true
     }
 
     messages =
