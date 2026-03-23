@@ -12,6 +12,7 @@ defmodule Livellm.Application do
       Livellm.Repo,
       {Ecto.Migrator,
        repos: Application.fetch_env!(:livellm, :ecto_repos), skip: skip_migrations?()},
+      {Finch, name: Livellm.Finch},
       {LlmComposer.Cache.Ets, []},
       {DNSCluster, query: Application.get_env(:livellm, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Livellm.PubSub},

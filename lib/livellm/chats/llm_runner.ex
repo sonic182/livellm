@@ -6,18 +6,20 @@ defmodule Livellm.Chats.LlmRunner do
   prompt caching), and dispatches to the appropriate LlmComposer provider.
   """
 
-  @spec run(map() | nil, String.t(), [map()], String.t() | nil, integer()) ::
+  @spec run(map() | nil, String.t(), [map()], String.t() | nil, integer(), keyword()) ::
           {:ok, map()} | {:error, term()}
 
-  def run(nil, _model, _history, _effort, _chat_id), do: {:error, :no_provider}
-  def run(_config, "", _history, _effort, _chat_id), do: {:error, :no_model}
+  def run(config, model, history, effort, chat_id, run_opts \\ [])
+  def run(nil, _model, _history, _effort, _chat_id, _run_opts), do: {:error, :no_provider}
+  def run(_config, "", _history, _effort, _chat_id, _run_opts), do: {:error, :no_model}
 
-  def run(config, model, history, reasoning_effort, chat_id) do
+  def run(config, model, history, reasoning_effort, chat_id, run_opts) do
     provider_mod = provider_module(config.provider)
     opts = [model: model, api_key: config.api_key]
     opts = if config.base_url, do: Keyword.put(opts, :url, config.base_url), else: opts
     opts = maybe_add_reasoning(opts, config.provider, reasoning_effort)
     opts = maybe_add_cache_key(opts, config.provider, chat_id)
+    opts = if run_opts[:stream], do: Keyword.put(opts, :stream_response, true), else: opts
 
     settings = %LlmComposer.Settings{
       providers: [{provider_mod, opts}],

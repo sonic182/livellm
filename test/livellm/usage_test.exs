@@ -3,6 +3,7 @@ defmodule Livellm.UsageTest do
 
   alias Decimal
   alias Livellm.Usage
+  alias LlmComposer.Cache.Ets
 
   test "aggregate_chat_metrics sums assistant tokens and costs" do
     messages = [
@@ -50,5 +51,53 @@ defmodule Livellm.UsageTest do
 
     assert Usage.format_total_tokens(priced_metrics) == "48 tokens"
     assert Usage.format_total_cost(priced_metrics) == "$0.000056"
+  end
+
+  test "stream_cost_tracking_attrs derives openrouter pricing from final usage chunk" do
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put(
+      "minimax/minimax-m2.7-20260318",
+      %{
+        "data" => %{
+          "endpoints" => [
+            %{
+              "provider_name" => "Minimax",
+              "pricing" => %{
+                "prompt" => "0.0000003",
+                "completion" => "0.0000012"
+              }
+            }
+          ]
+        }
+      },
+      60
+    )
+
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    attrs =
+      Usage.stream_cost_tracking_attrs(
+        :open_router,
+        %{input_tokens: 30, output_tokens: 472, total_tokens: 502},
+        %{
+          "model" => "minimax/minimax-m2.7-20260318",
+          "provider" => "Minimax",
+          "usage" => %{"cost" => 5.754e-4}
+        }
+      )
+
+    assert attrs.input_tokens == 30
+    assert attrs.output_tokens == 472
+    assert attrs.total_tokens == 502
+    assert attrs.provider_name == "Minimax"
+    assert attrs.provider_model == "minimax/minimax-m2.7-20260318"
+    assert attrs.cost_currency == "USD"
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000009000000"))
+    assert Decimal.equal?(attrs.output_cost, Decimal.new("0.0005664000000"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.0005754000000"))
   end
 end

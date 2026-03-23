@@ -11,6 +11,9 @@ config :livellm,
   ecto_repos: [Livellm.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :llm_composer,
+  tesla_adapter: {Tesla.Adapter.Finch, name: Livellm.Finch}
+
 # Configure the endpoint
 config :livellm, LivellmWeb.Endpoint,
   url: [host: "localhost"],

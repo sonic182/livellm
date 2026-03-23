@@ -4,6 +4,8 @@ defmodule Livellm.Usage do
   """
 
   alias Decimal
+  alias LlmComposer.Cost.Pricing
+  alias LlmComposer.CostInfo
 
   @type chat_metrics :: %{
           input_tokens: non_neg_integer(),
@@ -76,6 +78,25 @@ defmodule Livellm.Usage do
     }
   end
 
+  @spec stream_cost_tracking_attrs(atom(), map() | nil, map() | nil) :: map()
+  def stream_cost_tracking_attrs(provider, usage, raw_chunk) do
+    cost_info = stream_cost_info(provider, usage, raw_chunk)
+    input_tokens = usage && usage.input_tokens
+    output_tokens = usage && usage.output_tokens
+
+    %{
+      input_tokens: token_value(cost_info, :input_tokens, input_tokens),
+      output_tokens: token_value(cost_info, :output_tokens, output_tokens),
+      total_tokens: token_total(cost_info, input_tokens, output_tokens),
+      input_cost: cost_value(cost_info, :input_cost),
+      output_cost: cost_value(cost_info, :output_cost),
+      total_cost: cost_value(cost_info, :total_cost),
+      cost_currency: cost_value(cost_info, :currency),
+      provider_name: stream_provider_name(provider, cost_info, raw_chunk),
+      provider_model: stream_provider_model(cost_info, raw_chunk)
+    }
+  end
+
   @spec format_total_tokens(chat_metrics()) :: String.t() | nil
   def format_total_tokens(%{total_tokens: total_tokens}) when total_tokens > 0 do
     "#{total_tokens} tokens"
@@ -120,4 +141,45 @@ defmodule Livellm.Usage do
   defp provider_model(nil, %{"model" => model}) when is_binary(model), do: model
   defp provider_model(nil, _raw), do: nil
   defp provider_model(cost_info, _raw), do: cost_info.provider_model
+
+  defp stream_cost_info(:open_router, usage, raw_chunk)
+       when is_map(usage) and is_map(raw_chunk) do
+    model = Map.get(raw_chunk, "model")
+    provider = Map.get(raw_chunk, "provider")
+
+    if is_binary(model) and is_binary(provider) do
+      pricing =
+        Pricing.fetch_pricing(:open_router, body: %{"model" => model, "provider" => provider})
+
+      CostInfo.new(
+        provider,
+        model,
+        usage.input_tokens || 0,
+        usage.output_tokens || 0,
+        pricing || []
+      )
+    else
+      nil
+    end
+  end
+
+  defp stream_cost_info(_provider, _usage, _raw_chunk), do: nil
+
+  defp stream_provider_name(_provider, cost_info, _raw_chunk) when not is_nil(cost_info),
+    do: to_string(cost_info.provider_name)
+
+  defp stream_provider_name(_provider, _cost_info, %{"provider" => provider_name})
+       when is_binary(provider_name),
+       do: provider_name
+
+  defp stream_provider_name(provider, _cost_info, _raw_chunk) when is_atom(provider),
+    do: Atom.to_string(provider)
+
+  defp stream_provider_name(provider, _cost_info, _raw_chunk), do: provider
+
+  defp stream_provider_model(cost_info, _raw_chunk) when not is_nil(cost_info),
+    do: cost_info.provider_model
+
+  defp stream_provider_model(_cost_info, %{"model" => model}) when is_binary(model), do: model
+  defp stream_provider_model(_cost_info, _raw_chunk), do: nil
 end
