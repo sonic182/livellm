@@ -44,18 +44,30 @@ defmodule LivellmWeb.ChatComponents do
           <p class="px-3 py-2 text-xs text-zinc-600 italic">No chats yet</p>
         <% else %>
           <%= for chat <- @chats do %>
-            <.link
-              navigate={~p"/chats/#{chat.id}"}
-              id={"chat-#{chat.id}"}
-              class={[
-                "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150",
-                chat.id == @current_chat_id && "bg-zinc-800 text-zinc-100",
-                chat.id != @current_chat_id && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-              ]}
-            >
-              <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0" />
-              <span class="truncate">{chat.title}</span>
-            </.link>
+            <div id={"chat-item-#{chat.id}"} class="group relative flex items-center rounded-lg">
+              <.link
+                navigate={~p"/chats/#{chat.id}"}
+                id={"chat-#{chat.id}"}
+                class={[
+                  "flex items-center gap-2 w-full px-3 py-2 pr-8 rounded-lg text-sm truncate transition-colors duration-150",
+                  chat.id == @current_chat_id && "bg-zinc-800 text-zinc-100",
+                  chat.id != @current_chat_id && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                ]}
+              >
+                <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0" />
+                <span class="truncate">{chat.title}</span>
+              </.link>
+              <button
+                phx-click="delete_chat"
+                phx-value-id={chat.id}
+                id={"delete-chat-#{chat.id}"}
+                data-confirm="Delete this chat? This cannot be undone."
+                class="absolute right-1.5 p-1 rounded opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-all duration-150"
+                title="Delete chat"
+              >
+                <.icon name="hero-trash" class="size-3.5" />
+              </button>
+            </div>
           <% end %>
         <% end %>
       </nav>

@@ -99,6 +99,23 @@ defmodule LivellmWeb.ChatLive do
     {:noreply, socket}
   end
 
+  def handle_event("delete_chat", %{"id" => id}, socket) do
+    chat = Chats.get_chat!(String.to_integer(id))
+    {:ok, _} = Chats.delete_chat(chat)
+
+    socket = assign(socket, :chats, Chats.list_chats())
+
+    if socket.assigns.current_chat_id == chat.id do
+      {:noreply,
+       socket
+       |> assign(:chat, nil)
+       |> assign(:current_chat_id, nil)
+       |> push_navigate(to: ~p"/")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("update_chat_settings", params, socket) do
     new_provider_id = parse_provider_id(params["provider_id"])
     selected_model = resolve_model(params, socket.assigns, new_provider_id)
