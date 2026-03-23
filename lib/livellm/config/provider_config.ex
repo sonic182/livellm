@@ -21,7 +21,13 @@ defmodule Livellm.Config.ProviderConfig do
     provider_config
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
-    |> validate_inclusion(:provider, ["openai", "openrouter", "ollama", "google"])
+    |> validate_inclusion(:provider, [
+      "openai",
+      "openai_responses",
+      "openrouter",
+      "ollama",
+      "google"
+    ])
     |> validate_length(:default_model, min: 1)
   end
 end

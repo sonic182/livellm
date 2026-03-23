@@ -26,6 +26,8 @@
           <form
             id="chat-settings-form"
             phx-change="update_chat_settings"
+            phx-hook=".ChatSettings"
+            data-chat-id={@current_chat_id}
             class="flex items-center gap-2"
           >
             <select
@@ -50,6 +52,19 @@
               phx-debounce="300"
               class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors w-44"
             />
+
+            <select
+              id="reasoning-effort-select"
+              name="reasoning_effort"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+            >
+              <option value="">No reasoning</option>
+              <%= for effort <- ~w(minimal low medium high xhigh) do %>
+                <option value={effort} selected={@selected_reasoning_effort == effort}>
+                  {effort}
+                </option>
+              <% end %>
+            </select>
           </form>
         <% end %>
       </header>
@@ -118,6 +133,34 @@
     </div>
   </div>
 
+  <%!-- Persist chat settings (provider, model, reasoning effort) per chat in localStorage --%>
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatSettings">
+    const key = (chatId) => `livellm:chat_settings:${chatId || "new"}`
+    export default {
+      chatId() { return this.el.dataset.chatId || "new" },
+      mounted() {
+        this.handleEvent("save_chat_settings", (settings) => {
+          localStorage.setItem(key(this.chatId()), JSON.stringify(settings))
+        })
+        this._lastChatId = this.chatId()
+        this.restore(this.chatId())
+      },
+      updated() {
+        const currentChatId = this.chatId()
+        if (currentChatId !== this._lastChatId) {
+          this._lastChatId = currentChatId
+          this.restore(currentChatId)
+        }
+      },
+      restore(chatId) {
+        const saved = localStorage.getItem(key(chatId))
+        if (saved) {
+          try { this.pushEvent("restore_chat_settings", JSON.parse(saved)) } catch (_) {}
+        }
+      }
+    }
+  </script>
+
   <%!-- Auto-grow textarea hook --%>
   <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoGrow">
     export default {
@@ -125,6 +168,12 @@
         this.el.addEventListener("input", () => {
           this.el.style.height = "auto"
           this.el.style.height = this.el.scrollHeight + "px"
+        })
+        this.el.addEventListener("keydown", (e) => {
+          if (e.ctrlKey && e.key === "Enter") {
+            e.preventDefault()
+            this.el.closest("form").requestSubmit()
+          }
         })
       }
     }
