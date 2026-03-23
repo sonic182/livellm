@@ -121,14 +121,6 @@ defmodule LivellmWeb.ChatComponents do
 
       <%!-- Bubble --%>
       <div class="max-w-[72%] space-y-2">
-        <div class={[
-          "rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
-          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
-          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
-        ]}>
-          {@message.content}
-        </div>
-
         <%= if @message.role == "assistant" and
               ((is_binary(@message.reasoning) and @message.reasoning != "") or
                  ((@message.reasoning_tokens || 0) > 0)) do %>
@@ -156,6 +148,14 @@ defmodule LivellmWeb.ChatComponents do
             <% end %>
           </details>
         <% end %>
+
+        <div class={[
+          "rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
+          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
+        ]}>
+          {@message.content}
+        </div>
       </div>
     </div>
     """
