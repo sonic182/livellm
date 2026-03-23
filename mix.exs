@@ -42,6 +42,7 @@ defmodule Livellm.MixProject do
     [
       {:bandit, "~> 1.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dns_cluster, "~> 0.2.0"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, ">= 0.0.0"},

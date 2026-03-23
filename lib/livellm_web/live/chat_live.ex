@@ -4,6 +4,7 @@ defmodule LivellmWeb.ChatLive do
   import LivellmWeb.ChatComponents
 
   alias Livellm.Chats
+  alias Livellm.Chats.LlmRunner
   alias Livellm.Config
 
   def mount(_params, _session, socket) do
@@ -77,7 +78,7 @@ defmodule LivellmWeb.ChatLive do
     reasoning_effort = socket.assigns.selected_reasoning_effort
 
     Task.start(fn ->
-      result = call_llm(provider_config, model, history, reasoning_effort, chat.id)
+      result = LlmRunner.run(provider_config, model, history, reasoning_effort, chat.id)
       send(pid, {:llm_response, chat, result})
     end)
 
@@ -172,64 +173,4 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, false)
      |> put_flash(:error, "LLM error: #{inspect(reason)}")}
   end
-
-  defp call_llm(nil, _model, _history, _reasoning_effort, _chat_id), do: {:error, :no_provider}
-  defp call_llm(_config, "", _history, _reasoning_effort, _chat_id), do: {:error, :no_model}
-
-  defp call_llm(config, model, history, reasoning_effort, chat_id) do
-    provider_mod = provider_module(config.provider)
-    opts = [model: model, api_key: config.api_key]
-    opts = if config.base_url, do: Keyword.put(opts, :url, config.base_url), else: opts
-    opts = maybe_add_reasoning(opts, config.provider, reasoning_effort)
-    opts = maybe_add_cache_key(opts, config.provider, chat_id)
-
-    settings = %LlmComposer.Settings{
-      providers: [{provider_mod, opts}],
-      system_prompt: "You are a helpful assistant."
-    }
-
-    messages =
-      Enum.map(history, &LlmComposer.Message.new(String.to_existing_atom(&1.role), &1.content))
-
-    LlmComposer.run_completion(settings, messages)
-  end
-
-  defp maybe_add_reasoning(opts, "openrouter", effort) when effort not in [nil, ""] do
-    Keyword.put(opts, :request_params, %{"reasoning" => %{"enabled" => true, "effort" => effort}})
-  end
-
-  defp maybe_add_reasoning(opts, "openai_responses", effort) when effort not in [nil, ""] do
-    Keyword.put(opts, :reasoning_effort, effort)
-  end
-
-  defp maybe_add_reasoning(opts, _provider, _effort), do: opts
-
-  defp maybe_add_cache_key(opts, "openai_responses", chat_id) do
-    Keyword.update(opts, :request_params, %{"prompt_cache_key" => "chat_#{chat_id}"}, fn params ->
-      Map.put(params, "prompt_cache_key", "chat_#{chat_id}")
-    end)
-  end
-
-  defp maybe_add_cache_key(opts, "openrouter", _chat_id) do
-    model = Keyword.get(opts, :model, "")
-
-    if String.starts_with?(model, "anthropic/") do
-      Keyword.update(
-        opts,
-        :request_params,
-        %{"cache_control" => %{"type" => "ephemeral"}},
-        fn params -> Map.put(params, "cache_control", %{"type" => "ephemeral"}) end
-      )
-    else
-      opts
-    end
-  end
-
-  defp maybe_add_cache_key(opts, _provider, _chat_id), do: opts
-
-  defp provider_module("openai"), do: LlmComposer.Providers.OpenAI
-  defp provider_module("openai_responses"), do: LlmComposer.Providers.OpenAIResponses
-  defp provider_module("openrouter"), do: LlmComposer.Providers.OpenRouter
-  defp provider_module("ollama"), do: LlmComposer.Providers.Ollama
-  defp provider_module("google"), do: LlmComposer.Providers.Google
 end
