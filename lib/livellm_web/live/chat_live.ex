@@ -4,8 +4,8 @@ defmodule LivellmWeb.ChatLive do
   import LivellmWeb.ChatComponents
 
   alias Livellm.Chats
-  alias Livellm.Chats.LlmRunner
   alias Livellm.Config
+  alias Livellm.Usage
 
   def mount(_params, _session, socket) do
     provider_configs = Config.list_provider_configs()
@@ -22,6 +22,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, (enabled && enabled.default_model) || "")
      |> assign(:selected_reasoning_effort, nil)
      |> assign(:waiting, false)
+     |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [])}
   end
 
@@ -31,6 +32,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:page_title, "New Chat")
      |> assign(:chat, nil)
      |> assign(:current_chat_id, nil)
+     |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [], reset: true)}
   end
 
@@ -43,6 +45,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:page_title, chat.title)
      |> assign(:chat, chat)
      |> assign(:current_chat_id, chat.id)
+     |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
      |> stream(:messages, messages, reset: true)}
   end
 
@@ -78,7 +81,7 @@ defmodule LivellmWeb.ChatLive do
     reasoning_effort = socket.assigns.selected_reasoning_effort
 
     Task.start(fn ->
-      result = LlmRunner.run(provider_config, model, history, reasoning_effort, chat.id)
+      result = llm_runner().run(provider_config, model, history, reasoning_effort, chat.id)
       send(pid, {:llm_response, chat, result})
     end)
 
@@ -155,18 +158,26 @@ defmodule LivellmWeb.ChatLive do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
-    {:ok, assistant_msg} =
-      Chats.create_message(chat, %{
+    attrs =
+      %{
         role: "assistant",
         content: content,
         reasoning: reasoning,
         reasoning_details: reasoning_details,
         raw_response: llm_response.raw
-      })
+      }
+      |> Map.merge(Usage.cost_tracking_attrs(llm_response))
+
+    {:ok, assistant_msg} =
+      Chats.create_message(chat, attrs)
 
     {:noreply,
      socket
      |> assign(:waiting, false)
+     |> assign(
+       :chat_metrics,
+       Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
+     )
      |> stream_insert(:messages, assistant_msg)}
   end
 
@@ -175,5 +186,9 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:waiting, false)
      |> put_flash(:error, "LLM error: #{inspect(reason)}")}
+  end
+
+  defp llm_runner do
+    Application.get_env(:livellm, :llm_runner, Livellm.Chats.LlmRunner)
   end
 end
