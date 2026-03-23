@@ -73,6 +73,22 @@ defmodule LivellmWeb.Layouts do
   end
 
   @doc """
+  Renders a full-screen chat layout with no navbar.
+  Used for the chat and settings LiveViews.
+  """
+  attr :flash, :map, required: true, doc: "the map of flash messages"
+  slot :inner_block, required: true
+
+  def chat(assigns) do
+    ~H"""
+    <div class="h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 antialiased">
+      {render_slot(@inner_block)}
+    </div>
+    <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
   Shows the flash group with standard titles and content.
 
   ## Examples
