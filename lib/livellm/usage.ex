@@ -11,6 +11,7 @@ defmodule Livellm.Usage do
           input_tokens: non_neg_integer(),
           output_tokens: non_neg_integer(),
           total_tokens: non_neg_integer(),
+          reasoning_tokens: non_neg_integer(),
           total_cost: Decimal.t() | nil,
           currency: String.t() | nil,
           cost_tracked?: boolean()
@@ -22,6 +23,7 @@ defmodule Livellm.Usage do
       input_tokens: 0,
       output_tokens: 0,
       total_tokens: 0,
+      reasoning_tokens: 0,
       total_cost: nil,
       currency: nil,
       cost_tracked?: false
@@ -40,7 +42,8 @@ defmodule Livellm.Usage do
         metrics
         | input_tokens: metrics.input_tokens + (message.input_tokens || 0),
           output_tokens: metrics.output_tokens + (message.output_tokens || 0),
-          total_tokens: metrics.total_tokens + (message.total_tokens || 0)
+          total_tokens: metrics.total_tokens + (message.total_tokens || 0),
+          reasoning_tokens: metrics.reasoning_tokens + (message.reasoning_tokens || 0)
       }
 
     case message.total_cost do
@@ -69,6 +72,7 @@ defmodule Livellm.Usage do
       input_tokens: input_tokens,
       output_tokens: output_tokens,
       total_tokens: token_total(cost_info, input_tokens, output_tokens),
+      reasoning_tokens: reasoning_tokens(nil, llm_response.raw),
       input_cost: cost_value(cost_info, :input_cost),
       output_cost: cost_value(cost_info, :output_cost),
       total_cost: cost_value(cost_info, :total_cost),
@@ -88,6 +92,7 @@ defmodule Livellm.Usage do
       input_tokens: token_value(cost_info, :input_tokens, input_tokens),
       output_tokens: token_value(cost_info, :output_tokens, output_tokens),
       total_tokens: token_total(cost_info, input_tokens, output_tokens),
+      reasoning_tokens: reasoning_tokens(usage, raw_chunk),
       input_cost: cost_value(cost_info, :input_cost),
       output_cost: cost_value(cost_info, :output_cost),
       total_cost: cost_value(cost_info, :total_cost),
@@ -103,6 +108,13 @@ defmodule Livellm.Usage do
   end
 
   def format_total_tokens(_metrics), do: nil
+
+  @spec format_reasoning_tokens(chat_metrics()) :: String.t() | nil
+  def format_reasoning_tokens(%{reasoning_tokens: reasoning_tokens}) when reasoning_tokens > 0 do
+    "#{reasoning_tokens} reasoning"
+  end
+
+  def format_reasoning_tokens(_metrics), do: nil
 
   @spec format_total_cost(chat_metrics()) :: String.t() | nil
   def format_total_cost(%{cost_tracked?: true, total_cost: %Decimal{} = total_cost} = metrics) do
@@ -130,6 +142,16 @@ defmodule Livellm.Usage do
     do: (input_tokens || 0) + (output_tokens || 0)
 
   defp token_total(cost_info, _input_tokens, _output_tokens), do: cost_info.total_tokens
+
+  defp reasoning_tokens(_usage, %{
+         "usage" => %{
+           "completion_tokens_details" => %{"reasoning_tokens" => reasoning_tokens}
+         }
+       })
+       when is_integer(reasoning_tokens),
+       do: reasoning_tokens
+
+  defp reasoning_tokens(_usage, _raw), do: nil
 
   defp cost_value(nil, _field), do: nil
   defp cost_value(cost_info, field), do: Map.get(cost_info, field)

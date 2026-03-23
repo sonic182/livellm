@@ -27,6 +27,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, false)
      |> assign(:streaming, true)
      |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [])}
   end
@@ -37,6 +38,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:page_title, "New Chat")
      |> assign(:chat, nil)
      |> assign(:current_chat_id, nil)
+     |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [], reset: true)}
   end
@@ -50,6 +53,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:page_title, chat.title)
      |> assign(:chat, chat)
      |> assign(:current_chat_id, chat.id)
+     |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
      |> stream(:messages, messages, reset: true)}
   end
@@ -106,7 +111,14 @@ defmodule LivellmWeb.ChatLive do
               end)
               |> LlmComposer.parse_stream_response(provider)
               |> Enum.reduce(
-                %{content: "", usage: nil, usage_raw: nil, provider: provider},
+                %{
+                  content: "",
+                  reasoning: "",
+                  reasoning_details: [],
+                  usage: nil,
+                  usage_raw: nil,
+                  provider: provider
+                },
                 &handle_stream_chunk(&1, &2, pid, chat)
               )
 
@@ -258,15 +270,28 @@ defmodule LivellmWeb.ChatLive do
     {:noreply, assign(socket, :streaming_content, content)}
   end
 
+  def handle_info({:stream_reasoning, _chat, reasoning}, socket) do
+    {:noreply, assign(socket, :streaming_reasoning, reasoning)}
+  end
+
   def handle_info(
         {:stream_done, chat,
-         %{content: content, usage: usage, usage_raw: usage_raw, provider: provider}},
+         %{
+           content: content,
+           reasoning: reasoning,
+           reasoning_details: reasoning_details,
+           usage: usage,
+           usage_raw: usage_raw,
+           provider: provider
+         }},
         socket
       ) do
     attrs =
       %{
         role: "assistant",
-        content: content
+        content: content,
+        reasoning: blank_to_nil(reasoning),
+        reasoning_details: blank_list_to_nil(reasoning_details)
       }
       |> Map.merge(Usage.stream_cost_tracking_attrs(provider, usage, usage_raw))
 
@@ -276,6 +301,7 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:waiting, false)
      |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -290,6 +316,18 @@ defmodule LivellmWeb.ChatLive do
     %{acc | content: new_content}
   end
 
+  defp handle_stream_chunk(%{type: :reasoning_delta} = chunk, acc, pid, chat) do
+    new_reasoning = acc.reasoning <> (chunk.reasoning || "")
+    new_reasoning_details = acc.reasoning_details ++ (chunk.reasoning_details || [])
+
+    Logger.debug(
+      "[chat_live] stream reasoning chat_id=#{chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
+    )
+
+    send(pid, {:stream_reasoning, chat, new_reasoning})
+    %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
+  end
+
   defp handle_stream_chunk(%{type: :usage} = chunk, acc, _pid, chat) do
     Logger.debug(
       "[chat_live] stream usage chat_id=#{chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
@@ -302,6 +340,14 @@ defmodule LivellmWeb.ChatLive do
     Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{chat.id} type=#{type}")
     acc
   end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp blank_list_to_nil(nil), do: nil
+  defp blank_list_to_nil([]), do: nil
+  defp blank_list_to_nil(value), do: value
 
   defp llm_runner do
     Application.get_env(:livellm, :llm_runner, Livellm.Chats.LlmRunner)

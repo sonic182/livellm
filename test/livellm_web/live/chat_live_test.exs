@@ -32,9 +32,11 @@ defmodule LivellmWeb.ChatLiveTest do
       Chats.create_message(chat, %{
         role: "assistant",
         content: "Tracked reply",
+        reasoning: "Thinking through the answer",
         input_tokens: 12,
         output_tokens: 6,
         total_tokens: 18,
+        reasoning_tokens: 5,
         total_cost: Decimal.new("0.003000"),
         cost_currency: "USD",
         provider_name: "open_ai",
@@ -46,6 +48,8 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(view, "#chat-metrics")
     assert render(element(view, "#chat-total-tokens")) =~ "18 tokens"
     assert render(element(view, "#chat-total-cost")) =~ "$0.003"
+    assert render(element(view, "#chat-reasoning-tokens")) =~ "5 reasoning"
+    assert has_element?(view, "#messages-1-reasoning")
   end
 
   test "existing chats show tokens without cost when pricing is unavailable", %{conn: conn} do
@@ -81,6 +85,11 @@ defmodule LivellmWeb.ChatLiveTest do
       :livellm,
       :llm_runner_result,
       FakeLlmRunner.success_response(%{
+        main_response: %LlmComposer.Message{
+          type: :assistant,
+          content: "Stubbed assistant reply",
+          reasoning: "Thinking through the answer"
+        },
         input_tokens: 40,
         output_tokens: 8,
         cost_info:
@@ -93,7 +102,10 @@ defmodule LivellmWeb.ChatLiveTest do
             output_price_per_million: Decimal.new("2.0"),
             currency: "USD"
           ),
-        raw: %{"model" => "gpt-4.1-mini"}
+        raw: %{
+          "model" => "gpt-4.1-mini",
+          "usage" => %{"completion_tokens_details" => %{"reasoning_tokens" => 9}}
+        }
       })
     )
 
@@ -111,6 +123,8 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(view, "#chat-total-tokens")
     assert render(element(view, "#chat-total-tokens")) =~ "48 tokens"
     assert render(element(view, "#chat-total-cost")) =~ "$0.000056"
+    assert render(element(view, "#chat-reasoning-tokens")) =~ "9 reasoning"
+    assert has_element?(view, "#messages-2-reasoning")
   end
 
   defp provider_config_fixture(attrs) do

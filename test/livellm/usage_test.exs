@@ -13,6 +13,7 @@ defmodule Livellm.UsageTest do
         input_tokens: 10,
         output_tokens: 5,
         total_tokens: 15,
+        reasoning_tokens: 4,
         total_cost: Decimal.new("0.001000"),
         cost_currency: "USD"
       },
@@ -21,6 +22,7 @@ defmodule Livellm.UsageTest do
         input_tokens: 20,
         output_tokens: 8,
         total_tokens: 28,
+        reasoning_tokens: 7,
         total_cost: Decimal.new("0.002500"),
         cost_currency: "USD"
       }
@@ -31,6 +33,7 @@ defmodule Livellm.UsageTest do
     assert metrics.input_tokens == 30
     assert metrics.output_tokens == 13
     assert metrics.total_tokens == 43
+    assert metrics.reasoning_tokens == 11
     assert Decimal.equal?(metrics.total_cost, Decimal.new("0.003500"))
     assert metrics.currency == "USD"
     assert metrics.cost_tracked?
@@ -44,12 +47,14 @@ defmodule Livellm.UsageTest do
 
     priced_metrics = %{
       total_tokens: 48,
+      reasoning_tokens: 12,
       total_cost: Decimal.new("0.000056"),
       currency: "USD",
       cost_tracked?: true
     }
 
     assert Usage.format_total_tokens(priced_metrics) == "48 tokens"
+    assert Usage.format_reasoning_tokens(priced_metrics) == "12 reasoning"
     assert Usage.format_total_cost(priced_metrics) == "$0.000056"
   end
 
@@ -86,13 +91,17 @@ defmodule Livellm.UsageTest do
         %{
           "model" => "minimax/minimax-m2.7-20260318",
           "provider" => "Minimax",
-          "usage" => %{"cost" => 5.754e-4}
+          "usage" => %{
+            "cost" => 5.754e-4,
+            "completion_tokens_details" => %{"reasoning_tokens" => 128}
+          }
         }
       )
 
     assert attrs.input_tokens == 30
     assert attrs.output_tokens == 472
     assert attrs.total_tokens == 502
+    assert attrs.reasoning_tokens == 128
     assert attrs.provider_name == "Minimax"
     assert attrs.provider_model == "minimax/minimax-m2.7-20260318"
     assert attrs.cost_currency == "USD"
