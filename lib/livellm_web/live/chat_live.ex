@@ -100,55 +100,15 @@ defmodule LivellmWeb.ChatLive do
         stream_mode = socket.assigns.stream_mode
 
         Task.Supervisor.start_child(Livellm.TaskSupervisor, fn ->
-          try do
-            result =
-              llm_runner().run(provider_config, model, history, reasoning_effort, chat.id,
-                stream: stream_mode
-              )
-
-            case result do
-              {:ok, %{stream: stream, provider: provider}} when not is_nil(stream) ->
-                Logger.debug(
-                  "[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}"
-                )
-
-                final =
-                  stream
-                  |> Stream.map(fn data ->
-                    Logger.debug("[debug][stream] data=#{inspect(data)}")
-
-                    data
-                  end)
-                  |> LlmComposer.parse_stream_response(provider)
-                  |> Enum.reduce(
-                    %{
-                      content: "",
-                      reasoning: "",
-                      reasoning_details: [],
-                      usage: nil,
-                      usage_raw: nil,
-                      provider: provider
-                    },
-                    &handle_stream_chunk(&1, &2, pid, chat)
-                  )
-
-                Logger.debug(
-                  "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
-                )
-
-                send(pid, {:stream_done, chat, final})
-
-              other ->
-                send(pid, {:llm_response, chat, other})
-            end
-          rescue
-            e ->
-              Logger.error(
-                "[chat_live] task crashed chat_id=#{chat.id} error=#{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-              )
-
-              send(pid, {:llm_response, chat, {:error, e}})
-          end
+          run_llm_task(
+            provider_config,
+            model,
+            history,
+            reasoning_effort,
+            chat,
+            stream_mode,
+            pid
+          )
         end)
 
         {:noreply,
@@ -319,6 +279,70 @@ defmodule LivellmWeb.ChatLive do
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
      )
      |> stream_insert(:messages, assistant_msg)}
+  end
+
+  defp run_llm_task(provider_config, model, history, reasoning_effort, chat, stream_mode, pid) do
+    provider_config
+    |> run_llm_request(model, history, reasoning_effort, chat.id, stream_mode)
+    |> handle_llm_result(chat, pid)
+  rescue
+    error ->
+      Logger.error(
+        "[chat_live] task crashed chat_id=#{chat.id} error=#{Exception.message(error)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+      )
+
+      send(pid, {:llm_response, chat, {:error, error}})
+  end
+
+  defp run_llm_request(
+         provider_config,
+         model,
+         history,
+         reasoning_effort,
+         chat_id,
+         stream_mode
+       ) do
+    llm_runner().run(provider_config, model, history, reasoning_effort, chat_id,
+      stream: stream_mode
+    )
+  end
+
+  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, pid)
+       when not is_nil(stream) do
+    Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
+
+    final = run_stream(stream, provider, chat, pid)
+
+    Logger.debug(
+      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
+    )
+
+    send(pid, {:stream_done, chat, final})
+  end
+
+  defp handle_llm_result(result, chat, pid) do
+    send(pid, {:llm_response, chat, result})
+  end
+
+  defp run_stream(stream, provider, chat, pid) do
+    stream
+    |> Stream.map(fn data ->
+      Logger.debug("[debug][stream] data=#{inspect(data)}")
+
+      data
+    end)
+    |> LlmComposer.parse_stream_response(provider)
+    |> Enum.reduce(
+      %{
+        content: "",
+        reasoning: "",
+        reasoning_details: [],
+        usage: nil,
+        usage_raw: nil,
+        provider: provider
+      },
+      &handle_stream_chunk(&1, &2, pid, chat)
+    )
   end
 
   defp handle_stream_chunk(%{type: :text_delta} = chunk, acc, pid, chat) do
