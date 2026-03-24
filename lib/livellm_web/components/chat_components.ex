@@ -158,7 +158,8 @@ defmodule LivellmWeb.ChatComponents do
 
         <div class={[
           "rounded-2xl text-sm",
-          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm px-4 py-3 leading-relaxed",
+          @message.role == "assistant" &&
+            "bg-zinc-800 text-zinc-100 rounded-tl-sm px-4 py-3 leading-relaxed",
           @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm px-3 py-2 break-words"
         ]}>
           <%= if @message.role == "assistant" do %>

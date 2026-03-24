@@ -227,14 +227,16 @@ defmodule LivellmWeb.ChatLive do
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
      )
-     |> stream_insert(:messages, assistant_msg)}
+     |> stream_insert(:messages, assistant_msg)
+     |> push_event("focus_input", %{})}
   end
 
   def handle_info({:llm_response, _chat, {:error, reason}}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> put_flash(:error, "LLM error: #{inspect(reason)}")}
+     |> put_flash(:error, "LLM error: #{inspect(reason)}")
+     |> push_event("focus_input", %{})}
   end
 
   def handle_info({:stream_chunk, _chat, content}, socket) do
@@ -278,7 +280,8 @@ defmodule LivellmWeb.ChatLive do
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
      )
-     |> stream_insert(:messages, assistant_msg)}
+     |> stream_insert(:messages, assistant_msg)
+     |> push_event("focus_input", %{})}
   end
 
   defp run_llm_task(provider_config, model, history, reasoning_effort, chat, stream_mode, pid) do

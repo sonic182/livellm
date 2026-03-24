@@ -181,7 +181,7 @@
           mounted() {
             this._sizer = document.createElement("span")
             this._sizer.style.cssText =
-              "position:absolute;visibility:hidden;white-space:pre;pointer-events:none"
+              "position:fixed;top:0;left:0;visibility:hidden;white-space:pre;pointer-events:none"
             document.body.appendChild(this._sizer)
             this._resize()
             this.el.addEventListener("input", () => this._resize())
@@ -207,9 +207,10 @@
       <%!-- Messages scroll area --%>
       <div
         id="messages-scroll"
-        class="flex-1 overflow-y-auto py-4"
+        class="flex-1 overflow-y-auto flex flex-col"
         phx-hook=".ScrollToBottom"
       >
+        <div class="mt-auto py-4">
         <div id="messages" phx-update="stream" class="space-y-1">
           <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
         </div>
@@ -264,6 +265,7 @@
             </div>
           <% true -> %>
         <% end %>
+        </div>
       </div>
 
       <%!-- Input bar --%>
@@ -334,6 +336,7 @@
   <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoGrow">
     export default {
       mounted() {
+        this.handleEvent("focus_input", () => this.el.focus())
         this.el.addEventListener("input", () => {
           this.el.style.height = "auto"
           this.el.style.height = this.el.scrollHeight + "px"
