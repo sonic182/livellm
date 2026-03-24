@@ -15,12 +15,14 @@ defmodule Livellm.Chats.LlmRunner do
 
   def run(config, model, history, reasoning_effort, chat_id, run_opts) do
     provider_mod = provider_module(config.provider)
-    opts = [model: model, api_key: config.api_key]
-    opts = if config.base_url, do: Keyword.put(opts, :url, config.base_url), else: opts
-    opts = maybe_add_reasoning(opts, config.provider, reasoning_effort)
-    opts = maybe_add_cache_key(opts, config.provider, chat_id)
-    opts = maybe_add_previous_response_id(opts, config, model, history)
-    opts = if run_opts[:stream], do: Keyword.put(opts, :stream_response, true), else: opts
+
+    opts =
+      [model: model, api_key: config.api_key]
+      |> maybe_put_url(config.base_url)
+      |> maybe_add_reasoning(config.provider, reasoning_effort)
+      |> maybe_add_cache_key(config.provider, chat_id)
+      |> maybe_add_previous_response_id(config, model, history)
+      |> maybe_put_stream(run_opts[:stream])
 
     settings = %LlmComposer.Settings{
       providers: [{provider_mod, opts}],
@@ -40,6 +42,12 @@ defmodule Livellm.Chats.LlmRunner do
 
     LlmComposer.run_completion(settings, messages)
   end
+
+  defp maybe_put_url(opts, nil), do: opts
+  defp maybe_put_url(opts, url), do: Keyword.put(opts, :url, url)
+
+  defp maybe_put_stream(opts, true), do: Keyword.put(opts, :stream_response, true)
+  defp maybe_put_stream(opts, _), do: opts
 
   defp provider_module("openai"), do: LlmComposer.Providers.OpenAI
   defp provider_module("openai_responses"), do: LlmComposer.Providers.OpenAIResponses
@@ -83,9 +91,10 @@ defmodule Livellm.Chats.LlmRunner do
   defp maybe_add_previous_response_id(opts, %{provider: "openai_responses"}, model, history) do
     previous_response_id = previous_response_id_for_openai_responses(history, model)
 
-    case previous_response_id do
-      id when is_binary(id) and id != "" -> Keyword.put(opts, :previous_response_id, id)
-      _ -> opts
+    if is_binary(previous_response_id) and previous_response_id != "" do
+      Keyword.put(opts, :previous_response_id, previous_response_id)
+    else
+      opts
     end
   end
 
