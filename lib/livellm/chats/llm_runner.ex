@@ -43,6 +43,25 @@ defmodule Livellm.Chats.LlmRunner do
     LlmComposer.run_completion(settings, messages)
   end
 
+  @doc false
+  def previous_response_id_for_openai_responses(history, model) do
+    normalized_model = normalize_openai_responses_model(model)
+
+    history
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{role: "assistant", provider_name: "open_ai_responses"} = message ->
+        if normalize_openai_responses_model(message.provider_model) == normalized_model do
+          message.provider_response_id
+        end
+
+      _message ->
+        nil
+    end)
+  end
+
+  # --- Private ---
+
   defp maybe_put_url(opts, nil), do: opts
   defp maybe_put_url(opts, url), do: Keyword.put(opts, :url, url)
 
@@ -99,23 +118,6 @@ defmodule Livellm.Chats.LlmRunner do
   end
 
   defp maybe_add_previous_response_id(opts, _config, _model, _history), do: opts
-
-  @doc false
-  def previous_response_id_for_openai_responses(history, model) do
-    normalized_model = normalize_openai_responses_model(model)
-
-    history
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %{role: "assistant", provider_name: "open_ai_responses"} = message ->
-        if normalize_openai_responses_model(message.provider_model) == normalized_model do
-          message.provider_response_id
-        end
-
-      _message ->
-        nil
-    end)
-  end
 
   defp normalize_openai_responses_model(model) when is_binary(model) do
     Regex.replace(~r/-\d{4}-\d{2}-\d{2}$/, model, "")
