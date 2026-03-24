@@ -8,6 +8,7 @@ defmodule LivellmWeb.ChatLiveTest do
   alias Livellm.ChatsFixtures
   alias Livellm.Config
   alias Livellm.TestSupport.FakeLlmRunner
+  alias LlmComposer.Cache.Ets
 
   setup do
     original_runner = Application.get_env(:livellm, :llm_runner)
@@ -182,6 +183,95 @@ defmodule LivellmWeb.ChatLiveTest do
     assert render(element(view, "#chat-reasoning-tokens")) =~ "9 reasoning"
     assert render(element(view, "#chat-cached-tokens")) =~ "12 cached"
     assert has_element?(view, "#messages-2-reasoning")
+  end
+
+  test "streaming responses persist normalized chunk metadata from llm_composer", %{conn: conn} do
+    provider_config =
+      provider_config_fixture(
+        provider: "openai_responses",
+        enabled: true,
+        default_model: "gpt-5.4-mini"
+      )
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-5.4-mini",
+        provider_config_id: provider_config.id
+      })
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put(
+      "models_dev_api",
+      %{
+        "openai" => %{
+          "models" => %{
+            "gpt-5.4-mini" => %{
+              "cost" => %{
+                "input" => "0.250",
+                "output" => "2.000",
+                "cache_read" => "0.125"
+              }
+            }
+          }
+        }
+      },
+      60
+    )
+
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      {:ok,
+       %LlmComposer.LlmResponse{
+         provider: :open_ai_responses,
+         status: :ok,
+         stream: [
+           ~s(data: {"type":"response.output_text.delta","delta":"Hello"}),
+           ~s(data: {"type":"response.output_text.delta","delta":" world"}),
+           ~s(data: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"Thinking"}]}}),
+           ~s(data: {"type":"response.completed","response":{"id":"resp_stream_123","model":"gpt-5.4-mini","usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48,"input_tokens_details":{"cached_tokens":12},"output_tokens_details":{"reasoning_tokens":9}}}})
+         ]
+       }}
+    )
+
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_submit(element(view, "#message-form"), %{"message" => "Hello"})
+
+    assert_receive {:fake_llm_runner_called, _provider_config, "gpt-5.4-mini", _history, nil,
+                    _chat_id, _opts}
+
+    assert_receive {:stream_done, %Livellm.Chats.Chat{id: chat_id}, assistant_msg}
+    assert chat_id == chat.id
+
+    _ = :sys.get_state(view.pid)
+
+    assert render(element(view, "#chat-total-tokens")) =~ "48 tokens"
+    assert render(element(view, "#chat-total-cost")) =~ "$0.000025"
+    assert render(element(view, "#chat-reasoning-tokens")) =~ "9 reasoning"
+    assert render(element(view, "#chat-cached-tokens")) =~ "12 cached"
+
+    assert assistant_msg.content == "Hello world"
+    assert assistant_msg.reasoning == "Thinking"
+    assert assistant_msg.input_tokens == 40
+    assert assistant_msg.output_tokens == 8
+    assert assistant_msg.total_tokens == 48
+    assert assistant_msg.cached_tokens == 12
+    assert assistant_msg.reasoning_tokens == 9
+    assert assistant_msg.provider_name == "open_ai_responses"
+    assert assistant_msg.provider_model == "gpt-5.4-mini"
+    assert assistant_msg.provider_response_id == "resp_stream_123"
+    assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000024500000"))
   end
 
   test "sending a follow-up openai responses message reuses previous_response_id across alias and snapshot models",

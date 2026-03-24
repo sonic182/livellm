@@ -298,7 +298,7 @@ defmodule LivellmWeb.ChatLive do
   defp run_llm_task(req, history, chat) do
     req
     |> run_llm_request(history, chat.id)
-    |> handle_llm_result(chat)
+    |> handle_llm_result(chat, req)
   rescue
     error ->
       Logger.error(
@@ -321,14 +321,14 @@ defmodule LivellmWeb.ChatLive do
     )
   end
 
-  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat)
+  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, req)
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
 
-    final = run_stream(stream, provider, chat)
+    final = run_stream(stream, provider, req.model, chat)
 
     Logger.debug(
-      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
+      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
     )
 
     case Chats.create_message(chat, build_stream_message_attrs(final)) do
@@ -344,7 +344,7 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_llm_result({:ok, llm_response}, chat) do
+  defp handle_llm_result({:ok, llm_response}, chat, _req) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
@@ -371,18 +371,16 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_llm_result({:error, reason}, chat) do
+  defp handle_llm_result({:error, reason}, chat, _req) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp run_stream(stream, provider, chat) do
+  defp run_stream(stream, provider, model, chat) do
     initial_acc = %{
       content: "",
       reasoning: "",
       reasoning_details: [],
-      usage: nil,
-      usage_raw: nil,
-      provider: provider,
+      final_chunk: nil,
       chat: chat
     }
 
@@ -391,54 +389,72 @@ defmodule LivellmWeb.ChatLive do
     #   Logger.debug("[debug][stream] data=#{inspect(data)}")
     #   data
     # end)
-    |> LlmComposer.parse_stream_response(provider)
+    |> LlmComposer.parse_stream_response(provider, track_costs: true, model: model)
     |> Enum.reduce(initial_acc, &handle_stream_chunk/2)
   end
 
-  defp handle_stream_chunk(%{type: :text_delta} = chunk, acc) do
-    new_content = acc.content <> (chunk.text || "")
-    Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(chunk.text)}")
+  defp handle_stream_chunk(chunk, acc) do
+    acc
+    |> maybe_append_text(chunk)
+    |> maybe_append_reasoning(chunk)
+    |> maybe_capture_final_chunk(chunk)
+  end
+
+  defp maybe_append_text(acc, %{text: text}) when text not in [nil, ""] do
+    new_content = acc.content <> text
+
+    Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(text)}")
     broadcast(acc.chat.id, {:stream_chunk, acc.chat, new_content})
+
     %{acc | content: new_content}
   end
 
-  defp handle_stream_chunk(%{type: :reasoning_delta} = chunk, acc) do
-    new_reasoning = acc.reasoning <> (chunk.reasoning || "")
-    new_reasoning_details = acc.reasoning_details ++ (chunk.reasoning_details || [])
+  defp maybe_append_text(acc, _chunk), do: acc
 
-    Logger.debug(
-      "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
-    )
+  defp maybe_append_reasoning(acc, chunk) do
+    reasoning = chunk.reasoning || ""
+    reasoning_details = chunk.reasoning_details || []
 
-    broadcast(acc.chat.id, {:stream_reasoning, acc.chat, new_reasoning})
-    %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
+    if reasoning == "" and reasoning_details == [] do
+      acc
+    else
+      new_reasoning = acc.reasoning <> reasoning
+      new_reasoning_details = acc.reasoning_details ++ reasoning_details
+
+      Logger.debug(
+        "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
+      )
+
+      broadcast(acc.chat.id, {:stream_reasoning, acc.chat, new_reasoning})
+
+      %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
+    end
   end
 
-  defp handle_stream_chunk(%{type: :done, usage: usage} = chunk, acc)
-       when not is_nil(usage) do
-    acc =
-      if (chunk.reasoning || "") != "" or (chunk.reasoning_details || []) != [] do
-        handle_stream_chunk(%{chunk | type: :reasoning_delta}, acc)
-      else
-        acc
-      end
-
-    Logger.debug(
-      "[chat_live] stream done-with-usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
-    )
-
-    %{acc | usage: chunk.usage, usage_raw: chunk.raw}
-  end
-
-  defp handle_stream_chunk(%{type: :usage} = chunk, acc) do
+  defp maybe_capture_final_chunk(acc, %{type: :usage} = chunk) do
     Logger.debug(
       "[chat_live] stream usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
     )
 
-    %{acc | usage: chunk.usage, usage_raw: chunk.raw}
+    %{acc | final_chunk: chunk}
   end
 
-  defp handle_stream_chunk(%{type: type}, acc) do
+  defp maybe_capture_final_chunk(acc, %{type: :done} = chunk) do
+    Logger.debug(
+      "[chat_live] stream done-with-usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
+    )
+
+    final_chunk =
+      if not is_nil(chunk.usage) or not is_nil(chunk.cost_info) or is_nil(acc.final_chunk) do
+        chunk
+      else
+        acc.final_chunk
+      end
+
+    %{acc | final_chunk: final_chunk}
+  end
+
+  defp maybe_capture_final_chunk(acc, %{type: type}) do
     Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{acc.chat.id} type=#{type}")
     acc
   end
@@ -449,9 +465,9 @@ defmodule LivellmWeb.ChatLive do
       content: final.content,
       reasoning: blank_to_nil(final.reasoning),
       reasoning_details: blank_list_to_nil(final.reasoning_details),
-      raw_response: final.usage_raw
+      raw_response: final.final_chunk && final.final_chunk.raw
     }
-    |> Map.merge(Usage.stream_cost_tracking_attrs(final.provider, final.usage, final.usage_raw))
+    |> Map.merge(Usage.stream_chunk_attrs(final.final_chunk))
   end
 
   defp blank_to_nil(nil), do: nil
