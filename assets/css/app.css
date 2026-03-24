@@ -102,4 +102,119 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Chat markdown rendering */
+.chat-markdown {
+  color: inherit;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown :where(h1, h2, h3, h4) {
+  margin: 1rem 0 0.5rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.chat-markdown :where(h1) {
+  font-size: 1.25rem;
+}
+
+.chat-markdown :where(h2) {
+  font-size: 1.125rem;
+}
+
+.chat-markdown :where(h3, h4) {
+  font-size: 1rem;
+}
+
+.chat-markdown :where(p, ul, ol, pre, blockquote, table, hr) {
+  margin: 0.75rem 0;
+}
+
+.chat-markdown :where(ul, ol) {
+  padding-left: 1.25rem;
+}
+
+.chat-markdown :where(ul) {
+  list-style: disc;
+}
+
+.chat-markdown :where(ol) {
+  list-style: decimal;
+}
+
+.chat-markdown :where(li + li) {
+  margin-top: 0.25rem;
+}
+
+.chat-markdown :where(a) {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.chat-markdown :where(blockquote) {
+  border-left: 2px solid rgb(63 63 70 / 1);
+  color: #d4d4d8;
+  padding-left: 0.875rem;
+}
+
+.chat-markdown :where(code) {
+  background: rgb(39 39 42 / 1);
+  border: 1px solid rgb(63 63 70 / 1);
+  border-radius: 0.4rem;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 0.875em;
+  padding: 0.15rem 0.35rem;
+}
+
+.chat-markdown :where(pre) {
+  background: rgb(9 9 11 / 0.9);
+  border: 1px solid rgb(63 63 70 / 1);
+  border-radius: 1rem;
+  overflow-x: auto;
+  padding: 0.875rem 1rem;
+}
+
+.chat-markdown :where(pre code) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  padding: 0;
+}
+
+.chat-markdown :where(hr) {
+  border: 0;
+  border-top: 1px solid rgb(63 63 70 / 1);
+}
+
+.chat-markdown :where(table) {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+}
+
+.chat-markdown :where(th, td) {
+  border: 1px solid rgb(63 63 70 / 1);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown :where(th) {
+  background: rgb(39 39 42 / 1);
+  font-weight: 600;
+}
+
 /* This file is for your main application CSS */
