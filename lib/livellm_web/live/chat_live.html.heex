@@ -362,8 +362,17 @@
   <%!-- Scroll messages to bottom on mount/update --%>
   <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollToBottom">
     export default {
-      mounted() { this.scrollToBottom() },
-      updated() { this.scrollToBottom() },
+      mounted() {
+        this._pinned = true
+        this.el.addEventListener("scroll", () => {
+          const { scrollTop, scrollHeight, clientHeight } = this.el
+          this._pinned = scrollHeight - scrollTop - clientHeight < 40
+        })
+        this.scrollToBottom()
+      },
+      updated() {
+        if (this._pinned) this.scrollToBottom()
+      },
       scrollToBottom() {
         this.el.scrollTop = this.el.scrollHeight
       }
