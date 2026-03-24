@@ -1,4 +1,6 @@
 defmodule LivellmWeb.ChatLive do
+  @moduledoc false
+
   use LivellmWeb, :live_view
 
   import LivellmWeb.ChatComponents
@@ -10,6 +12,7 @@ defmodule LivellmWeb.ChatLive do
 
   require Logger
 
+  @impl true
   def mount(_params, _session, socket) do
     provider_configs = Config.list_provider_configs()
     enabled = Enum.find(provider_configs, & &1.enabled)
@@ -32,6 +35,7 @@ defmodule LivellmWeb.ChatLive do
      |> stream(:messages, [])}
   end
 
+  @impl true
   def handle_params(_params, _uri, %{assigns: %{live_action: :new}} = socket) do
     {:noreply,
      socket
@@ -44,6 +48,7 @@ defmodule LivellmWeb.ChatLive do
      |> stream(:messages, [], reset: true)}
   end
 
+  @impl true
   def handle_params(%{"id" => id}, _uri, %{assigns: %{live_action: :show}} = socket) do
     chat = Chats.get_chat!(id)
     messages = Chats.list_messages(chat)
@@ -59,6 +64,7 @@ defmodule LivellmWeb.ChatLive do
      |> stream(:messages, messages, reset: true)}
   end
 
+  @impl true
   def handle_event(
         "send_message",
         %{"message" => content},
@@ -96,19 +102,15 @@ defmodule LivellmWeb.ChatLive do
         history = Chats.list_messages(chat)
         pid = self()
 
-        reasoning_effort = socket.assigns.selected_reasoning_effort
-        stream_mode = socket.assigns.stream_mode
+        req = %{
+          provider_config: provider_config,
+          model: model,
+          reasoning_effort: socket.assigns.selected_reasoning_effort,
+          stream_mode: socket.assigns.stream_mode
+        }
 
         Task.Supervisor.start_child(Livellm.TaskSupervisor, fn ->
-          run_llm_task(
-            provider_config,
-            model,
-            history,
-            reasoning_effort,
-            chat,
-            stream_mode,
-            pid
-          )
+          run_llm_task(req, history, chat, pid)
         end)
 
         {:noreply,
@@ -122,10 +124,12 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
+  @impl true
   def handle_event("send_message", _params, socket) do
     {:noreply, socket}
   end
 
+  @impl true
   def handle_event("delete_chat", %{"id" => id}, socket) do
     chat = Chats.get_chat!(String.to_integer(id))
     {:ok, _} = Chats.delete_chat(chat)
@@ -143,6 +147,7 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
+  @impl true
   def handle_event("update_chat_settings", params, socket) do
     new_provider_id = parse_provider_id(params["provider_id"])
     selected_model = resolve_model(params, socket.assigns, new_provider_id)
@@ -163,11 +168,12 @@ defmodule LivellmWeb.ChatLive do
      })}
   end
 
+  @impl true
   def handle_event("restore_chat_settings", params, socket) do
-    provider_id = parse_provider_id_from_restore(params["provider_id"])
+    provider_id = parse_provider_id(params["provider_id"])
     model = params["model"] || ""
     reasoning_effort = parse_effort(params["reasoning_effort"])
-    stream_mode = Map.get(params, "streaming", true)
+    stream_mode = Map.get(params, "streaming", true) in [true, "true"]
 
     valid_provider_id =
       if Enum.any?(socket.assigns.provider_configs, &(&1.id == provider_id)),
@@ -182,27 +188,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:stream_mode, stream_mode)}
   end
 
-  defp parse_provider_id(""), do: nil
-  defp parse_provider_id(id), do: String.to_integer(id)
-
-  defp parse_provider_id_from_restore(nil), do: nil
-  defp parse_provider_id_from_restore(id) when is_integer(id), do: id
-  defp parse_provider_id_from_restore(id) when is_binary(id), do: String.to_integer(id)
-
-  defp parse_effort(""), do: nil
-  defp parse_effort(val), do: val
-
-  defp resolve_model(%{"provider_id" => ""}, _assigns, _new_id), do: ""
-
-  defp resolve_model(params, assigns, new_provider_id) do
-    if new_provider_id != assigns.selected_provider_id do
-      config = Enum.find(assigns.provider_configs, &(&1.id == new_provider_id))
-      (config && config.default_model) || ""
-    else
-      params["model"] || assigns.selected_model
-    end
-  end
-
+  @impl true
   def handle_info({:llm_response, chat, {:ok, llm_response}}, socket) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
@@ -231,6 +217,7 @@ defmodule LivellmWeb.ChatLive do
      |> push_event("focus_input", %{})}
   end
 
+  @impl true
   def handle_info({:llm_response, _chat, {:error, reason}}, socket) do
     {:noreply,
      socket
@@ -239,14 +226,17 @@ defmodule LivellmWeb.ChatLive do
      |> push_event("focus_input", %{})}
   end
 
+  @impl true
   def handle_info({:stream_chunk, _chat, content}, socket) do
     {:noreply, assign(socket, :streaming_content, content)}
   end
 
+  @impl true
   def handle_info({:stream_reasoning, _chat, reasoning}, socket) do
     {:noreply, assign(socket, :streaming_reasoning, reasoning)}
   end
 
+  @impl true
   def handle_info(
         {:stream_done, chat,
          %{
@@ -284,9 +274,31 @@ defmodule LivellmWeb.ChatLive do
      |> push_event("focus_input", %{})}
   end
 
-  defp run_llm_task(provider_config, model, history, reasoning_effort, chat, stream_mode, pid) do
-    provider_config
-    |> run_llm_request(model, history, reasoning_effort, chat.id, stream_mode)
+  # --- Private ---
+
+  defp parse_provider_id(nil), do: nil
+  defp parse_provider_id(""), do: nil
+  defp parse_provider_id(id) when is_integer(id), do: id
+  defp parse_provider_id(id) when is_binary(id), do: String.to_integer(id)
+
+  defp parse_effort(""), do: nil
+  defp parse_effort(nil), do: nil
+  defp parse_effort(val) when is_binary(val), do: val
+
+  defp resolve_model(%{"provider_id" => ""}, _assigns, _new_id), do: ""
+
+  defp resolve_model(params, assigns, new_provider_id) do
+    if new_provider_id != assigns.selected_provider_id do
+      config = Enum.find(assigns.provider_configs, &(&1.id == new_provider_id))
+      (config && config.default_model) || ""
+    else
+      params["model"] || assigns.selected_model
+    end
+  end
+
+  defp run_llm_task(req, history, chat, pid) do
+    req
+    |> run_llm_request(history, chat.id)
     |> handle_llm_result(chat, pid)
   rescue
     error ->
@@ -297,16 +309,14 @@ defmodule LivellmWeb.ChatLive do
       send(pid, {:llm_response, chat, {:error, error}})
   end
 
-  defp run_llm_request(
-         provider_config,
-         model,
-         history,
-         reasoning_effort,
-         chat_id,
-         stream_mode
-       ) do
-    llm_runner().run(provider_config, model, history, reasoning_effort, chat_id,
-      stream: stream_mode
+  defp run_llm_request(req, history, chat_id) do
+    llm_runner().run(
+      req.provider_config,
+      req.model,
+      history,
+      req.reasoning_effort,
+      chat_id,
+      stream: req.stream_mode
     )
   end
 
@@ -328,72 +338,71 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp run_stream(stream, provider, chat, pid) do
+    initial_acc = %{
+      content: "",
+      reasoning: "",
+      reasoning_details: [],
+      usage: nil,
+      usage_raw: nil,
+      provider: provider,
+      pid: pid,
+      chat: chat
+    }
+
     stream
-    # useful for debugging stream case
     # |> Stream.map(fn data ->
     #   Logger.debug("[debug][stream] data=#{inspect(data)}")
-    #
     #   data
     # end)
     |> LlmComposer.parse_stream_response(provider)
-    |> Enum.reduce(
-      %{
-        content: "",
-        reasoning: "",
-        reasoning_details: [],
-        usage: nil,
-        usage_raw: nil,
-        provider: provider
-      },
-      &handle_stream_chunk(&1, &2, pid, chat)
-    )
+    |> Enum.reduce(initial_acc, &handle_stream_chunk/2)
   end
 
-  defp handle_stream_chunk(%{type: :text_delta} = chunk, acc, pid, chat) do
+  defp handle_stream_chunk(%{type: :text_delta} = chunk, acc) do
     new_content = acc.content <> (chunk.text || "")
-    Logger.debug("[chat_live] stream chunk chat_id=#{chat.id} text=#{inspect(chunk.text)}")
-    send(pid, {:stream_chunk, chat, new_content})
+    Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(chunk.text)}")
+    send(acc.pid, {:stream_chunk, acc.chat, new_content})
     %{acc | content: new_content}
   end
 
-  defp handle_stream_chunk(%{type: :reasoning_delta} = chunk, acc, pid, chat) do
+  defp handle_stream_chunk(%{type: :reasoning_delta} = chunk, acc) do
     new_reasoning = acc.reasoning <> (chunk.reasoning || "")
     new_reasoning_details = acc.reasoning_details ++ (chunk.reasoning_details || [])
 
     Logger.debug(
-      "[chat_live] stream reasoning chat_id=#{chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
+      "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
     )
 
-    send(pid, {:stream_reasoning, chat, new_reasoning})
+    send(acc.pid, {:stream_reasoning, acc.chat, new_reasoning})
     %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
   end
 
-  defp handle_stream_chunk(%{type: :done, usage: usage} = chunk, acc, pid, chat)
+  defp handle_stream_chunk(%{type: :done, usage: usage} = chunk, acc)
        when not is_nil(usage) do
     acc =
       if (chunk.reasoning || "") != "" or (chunk.reasoning_details || []) != [] do
-        handle_stream_chunk(%{chunk | type: :reasoning_delta}, acc, pid, chat)
+        handle_stream_chunk(%{chunk | type: :reasoning_delta}, acc)
       else
         acc
       end
 
     Logger.debug(
-      "[chat_live] stream done-with-usage chat_id=#{chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
+      "[chat_live] stream done-with-usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
     )
 
     %{acc | usage: chunk.usage, usage_raw: chunk.raw}
   end
 
-  defp handle_stream_chunk(%{type: :usage} = chunk, acc, _pid, chat) do
+  defp handle_stream_chunk(%{type: :usage} = chunk, acc) do
     Logger.debug(
-      "[chat_live] stream usage chat_id=#{chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
+      "[chat_live] stream usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
     )
 
     %{acc | usage: chunk.usage, usage_raw: chunk.raw}
   end
 
-  defp handle_stream_chunk(%{type: type} = _chunk, acc, _pid, chat) do
-    Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{chat.id} type=#{type}")
+  defp handle_stream_chunk(%{type: type}, acc) do
+    Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{acc.chat.id} type=#{type}")
     acc
   end
 

@@ -211,60 +211,60 @@
         phx-hook=".ScrollToBottom"
       >
         <div class="mt-auto py-4">
-        <div id="messages" phx-update="stream" class="space-y-1">
-          <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
-        </div>
-
-        <%!-- Streaming / thinking indicator --%>
-        <%= if not is_nil(@streaming_reasoning) do %>
-          <div id="streaming-reasoning" class="flex gap-3 px-6 py-2">
-            <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-amber-600/80 text-white mt-0.5">
-              <.icon name="hero-light-bulb" class="size-4" />
-            </div>
-            <div class="max-w-[72%] rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
-              <div class="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
-                <span>Thinking</span>
-              </div>
-              <div id="streaming-reasoning-content" class="whitespace-pre-wrap">
-                {@streaming_reasoning}<span class="inline-block w-0.5 h-4 bg-amber-200/60 animate-pulse ml-0.5 align-middle"></span>
-              </div>
-            </div>
+          <div id="messages" phx-update="stream" class="space-y-1">
+            <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
           </div>
-        <% end %>
 
-        <%= cond do %>
-          <% not is_nil(@streaming_content) -> %>
-            <div id="streaming-message" class="flex gap-3 px-6 py-3">
-              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
-                <.icon name="hero-cpu-chip" class="size-4" />
+          <%!-- Streaming / thinking indicator --%>
+          <%= if not is_nil(@streaming_reasoning) do %>
+            <div id="streaming-reasoning" class="flex gap-3 px-6 py-2">
+              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-amber-600/80 text-white mt-0.5">
+                <.icon name="hero-light-bulb" class="size-4" />
               </div>
-              <div class="max-w-[72%] bg-zinc-800 text-zinc-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
-                <.markdown_content
-                  markdown={@streaming_content}
-                  streaming={true}
-                  class="chat-markdown"
-                />
-                <div class="mt-2 flex items-center">
-                  <span class="inline-block h-4 w-0.5 animate-pulse bg-zinc-400"></span>
+              <div class="max-w-[72%] rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
+                <div class="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                  <span>Thinking</span>
+                </div>
+                <div id="streaming-reasoning-content" class="whitespace-pre-wrap">
+                  {@streaming_reasoning}<span class="inline-block w-0.5 h-4 bg-amber-200/60 animate-pulse ml-0.5 align-middle"></span>
                 </div>
               </div>
             </div>
-          <% @waiting -> %>
-            <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
-              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
-                <.icon name="hero-cpu-chip" class="size-4" />
+          <% end %>
+
+          <%= cond do %>
+            <% not is_nil(@streaming_content) -> %>
+              <div id="streaming-message" class="flex gap-3 px-6 py-3">
+                <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+                  <.icon name="hero-cpu-chip" class="size-4" />
+                </div>
+                <div class="max-w-[72%] bg-zinc-800 text-zinc-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
+                  <.markdown_content
+                    markdown={@streaming_content}
+                    streaming={true}
+                    class="chat-markdown"
+                  />
+                  <div class="mt-2 flex items-center">
+                    <span class="inline-block h-4 w-0.5 animate-pulse bg-zinc-400"></span>
+                  </div>
+                </div>
               </div>
-              <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
-                </span>
-                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
-                </span>
-                <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
-                </span>
+            <% @waiting -> %>
+              <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
+                <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
+                  <.icon name="hero-cpu-chip" class="size-4" />
+                </div>
+                <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
+                  </span>
+                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
+                  </span>
+                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
+                  </span>
+                </div>
               </div>
-            </div>
-          <% true -> %>
-        <% end %>
+            <% true -> %>
+          <% end %>
         </div>
       </div>
 
