@@ -6,6 +6,7 @@ defmodule LivellmWeb.ChatLive do
   import LivellmWeb.ChatComponents
 
   alias Livellm.Chats
+  alias Livellm.Chats.ActiveTasks
   alias Livellm.Config
   alias Livellm.Usage
   alias LlmComposer
@@ -23,6 +24,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:chats, Chats.list_chats())
      |> assign(:chat, nil)
      |> assign(:current_chat_id, nil)
+     |> assign(:subscribed_chat_id, nil)
      |> assign(:provider_configs, provider_configs)
      |> assign(:selected_provider_id, enabled && enabled.id)
      |> assign(:selected_model, (enabled && enabled.default_model) || "")
@@ -37,11 +39,14 @@ defmodule LivellmWeb.ChatLive do
 
   @impl true
   def handle_params(_params, _uri, %{assigns: %{live_action: :new}} = socket) do
+    if connected?(socket), do: maybe_unsubscribe(socket)
+
     {:noreply,
      socket
      |> assign(:page_title, "New Chat")
      |> assign(:chat, nil)
      |> assign(:current_chat_id, nil)
+     |> assign(:subscribed_chat_id, nil)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
@@ -53,11 +58,20 @@ defmodule LivellmWeb.ChatLive do
     chat = Chats.get_chat!(id)
     messages = Chats.list_messages(chat)
 
+    if connected?(socket) do
+      maybe_unsubscribe(socket)
+      Phoenix.PubSub.subscribe(Livellm.PubSub, stream_topic(chat.id))
+    end
+
+    waiting = connected?(socket) && ActiveTasks.active?(chat.id)
+
     {:noreply,
      socket
      |> assign(:page_title, chat.title)
      |> assign(:chat, chat)
      |> assign(:current_chat_id, chat.id)
+     |> assign(:subscribed_chat_id, chat.id)
+     |> assign(:waiting, waiting)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
@@ -100,7 +114,6 @@ defmodule LivellmWeb.ChatLive do
 
         provider_config = Enum.find(configs, &(&1.id == provider_id))
         history = Chats.list_messages(chat)
-        pid = self()
 
         req = %{
           provider_config: provider_config,
@@ -109,8 +122,10 @@ defmodule LivellmWeb.ChatLive do
           stream_mode: socket.assigns.stream_mode
         }
 
+        ActiveTasks.mark_active(chat.id)
+
         Task.Supervisor.start_child(Livellm.TaskSupervisor, fn ->
-          run_llm_task(req, history, chat, pid)
+          run_llm_task(req, history, chat)
         end)
 
         {:noreply,
@@ -189,23 +204,7 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_info({:llm_response, chat, {:ok, llm_response}}, socket) do
-    %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
-      llm_response.main_response
-
-    attrs =
-      %{
-        role: "assistant",
-        content: content,
-        reasoning: reasoning,
-        reasoning_details: reasoning_details,
-        raw_response: llm_response.raw
-      }
-      |> Map.merge(Usage.cost_tracking_attrs(llm_response))
-
-    {:ok, assistant_msg} =
-      Chats.create_message(chat, attrs)
-
+  def handle_info({:llm_done, _chat, assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
@@ -237,30 +236,7 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_info(
-        {:stream_done, chat,
-         %{
-           content: content,
-           reasoning: reasoning,
-           reasoning_details: reasoning_details,
-           usage: usage,
-           usage_raw: usage_raw,
-           provider: provider
-         }},
-        socket
-      ) do
-    attrs =
-      %{
-        role: "assistant",
-        content: content,
-        reasoning: blank_to_nil(reasoning),
-        reasoning_details: blank_list_to_nil(reasoning_details),
-        raw_response: usage_raw
-      }
-      |> Map.merge(Usage.stream_cost_tracking_attrs(provider, usage, usage_raw))
-
-    {:ok, assistant_msg} = Chats.create_message(chat, attrs)
-
+  def handle_info({:stream_done, _chat, %Livellm.Chats.Message{} = assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
@@ -274,7 +250,30 @@ defmodule LivellmWeb.ChatLive do
      |> push_event("focus_input", %{})}
   end
 
+  @impl true
+  def handle_info({:stream_save_failed, _chat}, socket) do
+    {:noreply,
+     socket
+     |> assign(:waiting, false)
+     |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
+     |> put_flash(:error, "Stream completed but failed to save response.")
+     |> push_event("focus_input", %{})}
+  end
+
   # --- Private ---
+
+  defp stream_topic(chat_id), do: "chat_stream:#{chat_id}"
+
+  defp broadcast(chat_id, message) do
+    Phoenix.PubSub.broadcast(Livellm.PubSub, stream_topic(chat_id), message)
+  end
+
+  defp maybe_unsubscribe(%{assigns: %{subscribed_chat_id: id}}) when not is_nil(id) do
+    Phoenix.PubSub.unsubscribe(Livellm.PubSub, stream_topic(id))
+  end
+
+  defp maybe_unsubscribe(_socket), do: :ok
 
   defp parse_provider_id(nil), do: nil
   defp parse_provider_id(""), do: nil
@@ -296,17 +295,19 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp run_llm_task(req, history, chat, pid) do
+  defp run_llm_task(req, history, chat) do
     req
     |> run_llm_request(history, chat.id)
-    |> handle_llm_result(chat, pid)
+    |> handle_llm_result(chat)
   rescue
     error ->
       Logger.error(
         "[chat_live] task crashed chat_id=#{chat.id} error=#{Exception.message(error)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
       )
 
-      send(pid, {:llm_response, chat, {:error, error}})
+      broadcast(chat.id, {:llm_response, chat, {:error, error}})
+  after
+    ActiveTasks.mark_done(chat.id)
   end
 
   defp run_llm_request(req, history, chat_id) do
@@ -320,24 +321,61 @@ defmodule LivellmWeb.ChatLive do
     )
   end
 
-  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, pid)
+  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat)
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
 
-    final = run_stream(stream, provider, chat, pid)
+    final = run_stream(stream, provider, chat)
 
     Logger.debug(
       "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
     )
 
-    send(pid, {:stream_done, chat, final})
+    case Chats.create_message(chat, build_stream_message_attrs(final)) do
+      {:ok, assistant_msg} ->
+        broadcast(chat.id, {:stream_done, chat, assistant_msg})
+
+      {:error, changeset} ->
+        Logger.error(
+          "[chat_live] failed to save stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
+        )
+
+        broadcast(chat.id, {:stream_save_failed, chat})
+    end
   end
 
-  defp handle_llm_result(result, chat, pid) do
-    send(pid, {:llm_response, chat, result})
+  defp handle_llm_result({:ok, llm_response}, chat) do
+    %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
+      llm_response.main_response
+
+    attrs =
+      %{
+        role: "assistant",
+        content: content,
+        reasoning: reasoning,
+        reasoning_details: reasoning_details,
+        raw_response: llm_response.raw
+      }
+      |> Map.merge(Usage.cost_tracking_attrs(llm_response))
+
+    case Chats.create_message(chat, attrs) do
+      {:ok, assistant_msg} ->
+        broadcast(chat.id, {:llm_done, chat, assistant_msg})
+
+      {:error, changeset} ->
+        Logger.error(
+          "[chat_live] failed to save non-stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
+        )
+
+        broadcast(chat.id, {:llm_response, chat, {:error, :save_failed}})
+    end
   end
 
-  defp run_stream(stream, provider, chat, pid) do
+  defp handle_llm_result({:error, reason}, chat) do
+    broadcast(chat.id, {:llm_response, chat, {:error, reason}})
+  end
+
+  defp run_stream(stream, provider, chat) do
     initial_acc = %{
       content: "",
       reasoning: "",
@@ -345,7 +383,6 @@ defmodule LivellmWeb.ChatLive do
       usage: nil,
       usage_raw: nil,
       provider: provider,
-      pid: pid,
       chat: chat
     }
 
@@ -361,7 +398,7 @@ defmodule LivellmWeb.ChatLive do
   defp handle_stream_chunk(%{type: :text_delta} = chunk, acc) do
     new_content = acc.content <> (chunk.text || "")
     Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(chunk.text)}")
-    send(acc.pid, {:stream_chunk, acc.chat, new_content})
+    broadcast(acc.chat.id, {:stream_chunk, acc.chat, new_content})
     %{acc | content: new_content}
   end
 
@@ -373,7 +410,7 @@ defmodule LivellmWeb.ChatLive do
       "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
     )
 
-    send(acc.pid, {:stream_reasoning, acc.chat, new_reasoning})
+    broadcast(acc.chat.id, {:stream_reasoning, acc.chat, new_reasoning})
     %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
   end
 
@@ -404,6 +441,17 @@ defmodule LivellmWeb.ChatLive do
   defp handle_stream_chunk(%{type: type}, acc) do
     Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{acc.chat.id} type=#{type}")
     acc
+  end
+
+  defp build_stream_message_attrs(final) do
+    %{
+      role: "assistant",
+      content: final.content,
+      reasoning: blank_to_nil(final.reasoning),
+      reasoning_details: blank_list_to_nil(final.reasoning_details),
+      raw_response: final.usage_raw
+    }
+    |> Map.merge(Usage.stream_cost_tracking_attrs(final.provider, final.usage, final.usage_raw))
   end
 
   defp blank_to_nil(nil), do: nil

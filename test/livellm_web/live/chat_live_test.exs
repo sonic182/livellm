@@ -247,24 +247,19 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(view, "#streaming-message .chat-markdown h1")
     assert has_element?(view, "#streaming-message .chat-markdown code")
 
-    send(view.pid, {
-      :stream_done,
-      chat,
-      %{
+    {:ok, assistant_msg} =
+      Livellm.Chats.create_message(chat, %{
+        role: "assistant",
         content: """
         ## Final answer
 
         ```elixir
         IO.puts("done")
         ```
-        """,
-        reasoning: "",
-        reasoning_details: [],
-        usage: nil,
-        usage_raw: %{},
-        provider: :open_ai
-      }
-    })
+        """
+      })
+
+    send(view.pid, {:stream_done, chat, assistant_msg})
 
     _ = :sys.get_state(view.pid)
 

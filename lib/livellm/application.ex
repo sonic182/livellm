@@ -16,6 +16,7 @@ defmodule Livellm.Application do
       {LlmComposer.Cache.Ets, []},
       {DNSCluster, query: Application.get_env(:livellm, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Livellm.PubSub},
+      Livellm.Chats.ActiveTasks,
       {Task.Supervisor, name: Livellm.TaskSupervisor},
       # Start to serve requests, typically the last entry
       LivellmWeb.Endpoint
