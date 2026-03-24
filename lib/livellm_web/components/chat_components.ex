@@ -5,6 +5,8 @@ defmodule LivellmWeb.ChatComponents do
 
   use LivellmWeb, :html
 
+  alias MDEx.Document
+
   @doc """
   Renders the sidebar with conversation list, new chat button, and settings link.
   """
@@ -155,14 +157,72 @@ defmodule LivellmWeb.ChatComponents do
         <% end %>
 
         <div class={[
-          "rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+          "rounded-2xl px-4 py-3 text-sm leading-relaxed",
           @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
-          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm"
+          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm whitespace-pre-wrap"
         ]}>
-          {@message.content}
+          <%= if @message.role == "assistant" do %>
+            <.markdown_content markdown={@message.content} class="chat-markdown" />
+          <% else %>
+            {@message.content}
+          <% end %>
         </div>
       </div>
     </div>
     """
+  end
+
+  attr :markdown, :string, required: true, doc: "markdown content to render"
+  attr :class, :string, default: nil, doc: "extra classes for the wrapper"
+  attr :streaming, :boolean, default: false, doc: "whether the markdown is partial"
+
+  def markdown_content(assigns) do
+    assigns =
+      assign(assigns, :rendered_markdown, render_markdown(assigns.markdown, assigns.streaming))
+
+    ~H"""
+    <div class={@class}>
+      {@rendered_markdown}
+    </div>
+    """
+  end
+
+  defp render_markdown(nil, _streaming), do: ""
+
+  defp render_markdown(markdown, streaming) when is_binary(markdown) do
+    markdown
+    |> MDEx.to_html!(mdex_options(streaming))
+    |> raw()
+  rescue
+    _error ->
+      html_escape(markdown)
+  end
+
+  defp mdex_options(streaming) do
+    [
+      extension: [
+        autolink: true,
+        footnotes: true,
+        shortcodes: true,
+        strikethrough: true,
+        table: true,
+        tasklist: true
+      ],
+      parse: [
+        relaxed_autolinks: true,
+        relaxed_tasklist_matching: true
+      ],
+      render: [
+        escape: true,
+        full_info_string: true,
+        github_pre_lang: true,
+        unsafe: false
+      ],
+      sanitize: Document.default_sanitize_options(),
+      streaming: streaming,
+      syntax_highlight: [
+        formatter: {:html_inline, theme: "onedark"}
+      ]
+    ]
   end
 end

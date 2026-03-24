@@ -95,6 +95,37 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#chat-metrics")
   end
 
+  test "assistant messages render markdown and sanitize raw html", %{conn: conn} do
+    chat = ChatsFixtures.chat_fixture()
+
+    {:ok, _message} =
+      Chats.create_message(chat, %{
+        role: "assistant",
+        content: """
+        # Release Notes
+
+        Visit [OpenAI](https://example.com)
+
+        - first
+        - second
+
+        ```elixir
+        IO.puts("hello")
+        ```
+
+        <script>alert("boom")</script>
+        """
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    assert has_element?(view, "#messages-1 .chat-markdown h1")
+    assert has_element?(view, "#messages-1 .chat-markdown a[href=\"https://example.com\"]")
+    assert has_element?(view, "#messages-1 .chat-markdown ul li")
+    assert has_element?(view, "#messages-1 .chat-markdown pre code")
+    refute has_element?(view, "#messages-1 script")
+  end
+
   test "sending a message updates the aggregate after the assistant response", %{conn: conn} do
     provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
 
@@ -202,6 +233,44 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert provider_config_called.id == provider_config.id
     assert Keyword.get(opts, :stream) == true
+  end
+
+  test "streaming content renders partial markdown and finalizes into a persisted assistant message",
+       %{conn: conn} do
+    chat = ChatsFixtures.chat_fixture()
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    send(view.pid, {:stream_chunk, chat, "# Partial title\n\n`still typing"})
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#streaming-message .chat-markdown h1")
+    assert has_element?(view, "#streaming-message .chat-markdown code")
+
+    send(view.pid, {
+      :stream_done,
+      chat,
+      %{
+        content: """
+        ## Final answer
+
+        ```elixir
+        IO.puts("done")
+        ```
+        """,
+        reasoning: "",
+        reasoning_details: [],
+        usage: nil,
+        usage_raw: %{},
+        provider: :open_ai
+      }
+    })
+
+    _ = :sys.get_state(view.pid)
+
+    refute has_element?(view, "#streaming-message")
+    assert has_element?(view, "#messages-1 .chat-markdown h2")
+    assert has_element?(view, "#messages-1 .chat-markdown pre code")
   end
 
   defp provider_config_fixture(attrs) do

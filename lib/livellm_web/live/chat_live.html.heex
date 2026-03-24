@@ -210,7 +210,14 @@
                 <.icon name="hero-cpu-chip" class="size-4" />
               </div>
               <div class="max-w-[72%] bg-zinc-800 text-zinc-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
-                {@streaming_content}<span class="inline-block w-0.5 h-4 bg-zinc-400 animate-pulse ml-0.5 align-middle"></span>
+                <.markdown_content
+                  markdown={@streaming_content}
+                  streaming={true}
+                  class="chat-markdown"
+                />
+                <div class="mt-2 flex items-center">
+                  <span class="inline-block h-4 w-0.5 animate-pulse bg-zinc-400"></span>
+                </div>
               </div>
             </div>
           <% @waiting -> %>
