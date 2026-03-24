@@ -109,7 +109,7 @@ defmodule LivellmWeb.ChatComponents do
     <div
       id={@id}
       class={[
-        "flex gap-3 px-6 py-3 group",
+        "flex gap-3 px-6 py-1.5 group",
         @message.role == "user" && "flex-row-reverse"
       ]}
     >
@@ -127,7 +127,7 @@ defmodule LivellmWeb.ChatComponents do
       </div>
 
       <%!-- Bubble --%>
-      <div class="max-w-[72%] space-y-2">
+      <div class="max-w-[72%] w-fit space-y-2">
         <%= if @message.role == "assistant" and
               ((is_binary(@message.reasoning) and @message.reasoning != "") or
                  ((@message.reasoning_tokens || 0) > 0)) do %>
@@ -157,9 +157,9 @@ defmodule LivellmWeb.ChatComponents do
         <% end %>
 
         <div class={[
-          "rounded-2xl px-4 py-3 text-sm leading-relaxed",
-          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm",
-          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm whitespace-pre-wrap"
+          "rounded-2xl text-sm",
+          @message.role == "assistant" && "bg-zinc-800 text-zinc-100 rounded-tl-sm px-4 py-3 leading-relaxed",
+          @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm px-3 py-2 break-words"
         ]}>
           <%= if @message.role == "assistant" do %>
             <.markdown_content markdown={@message.content} class="chat-markdown" />

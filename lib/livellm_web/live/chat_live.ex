@@ -326,11 +326,12 @@ defmodule LivellmWeb.ChatLive do
 
   defp run_stream(stream, provider, chat, pid) do
     stream
-    |> Stream.map(fn data ->
-      Logger.debug("[debug][stream] data=#{inspect(data)}")
-
-      data
-    end)
+    # useful for debugging stream case
+    # |> Stream.map(fn data ->
+    #   Logger.debug("[debug][stream] data=#{inspect(data)}")
+    #
+    #   data
+    # end)
     |> LlmComposer.parse_stream_response(provider)
     |> Enum.reduce(
       %{

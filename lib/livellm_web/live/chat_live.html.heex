@@ -10,7 +10,7 @@
         id="chat-header"
         class="flex items-center justify-between gap-4 px-6 py-3 border-b border-zinc-800 shrink-0 bg-zinc-950"
       >
-        <div class="flex min-w-0 items-center gap-3">
+        <div class="flex min-w-0 items-center gap-3 overflow-hidden">
           <h1 class="text-sm font-medium text-zinc-400 shrink-0 truncate">
             {(@chat && @chat.title) || "New Chat"}
           </h1>
@@ -121,12 +121,12 @@
             phx-change="update_chat_settings"
             phx-hook=".ChatSettings"
             data-chat-id={@current_chat_id}
-            class="flex items-center gap-2"
+            class="flex items-center gap-2 shrink-0"
           >
             <select
               id="provider-select"
               name="provider_id"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
             >
               <option value="">Select provider...</option>
               <%= for p <- @provider_configs do %>
@@ -143,13 +143,14 @@
               value={@selected_model}
               placeholder="Model..."
               phx-debounce="300"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors w-44"
+              phx-hook=".AutosizeInput"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors min-w-16"
             />
 
             <select
               id="reasoning-effort-select"
               name="reasoning_effort"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
+              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
             >
               <option value="">No reasoning</option>
               <%= for effort <- ~w(minimal low medium high xhigh) do %>
@@ -175,6 +176,33 @@
           </form>
         <% end %>
       </header>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".AutosizeInput">
+        export default {
+          mounted() {
+            this._sizer = document.createElement("span")
+            this._sizer.style.cssText =
+              "position:absolute;visibility:hidden;white-space:pre;pointer-events:none"
+            document.body.appendChild(this._sizer)
+            this._resize()
+            this.el.addEventListener("input", () => this._resize())
+          },
+          updated() {
+            this._resize()
+          },
+          destroyed() {
+            this._sizer.remove()
+          },
+          _resize() {
+            const s = getComputedStyle(this.el)
+            this._sizer.style.font = s.font
+            this._sizer.style.letterSpacing = s.letterSpacing
+            this._sizer.style.padding = s.padding
+            this._sizer.textContent = this.el.value || this.el.placeholder || ""
+            const minPx = parseFloat(s.minWidth) || 64
+            this.el.style.width = Math.max(this._sizer.offsetWidth + 2, minPx) + "px"
+          }
+        }
+      </script>
 
       <%!-- Messages scroll area --%>
       <div
@@ -311,7 +339,15 @@
           this.el.style.height = this.el.scrollHeight + "px"
         })
         this.el.addEventListener("keydown", (e) => {
-          if (e.ctrlKey && e.key === "Enter") {
+          const newline = (e.shiftKey && e.key === "Enter") || (e.ctrlKey && e.key === "j")
+          if (newline) {
+            e.preventDefault()
+            const start = this.el.selectionStart
+            const end = this.el.selectionEnd
+            this.el.value = this.el.value.slice(0, start) + "\n" + this.el.value.slice(end)
+            this.el.selectionStart = this.el.selectionEnd = start + 1
+            this.el.dispatchEvent(new Event("input"))
+          } else if (e.key === "Enter") {
             e.preventDefault()
             this.el.closest("form").requestSubmit()
           }
