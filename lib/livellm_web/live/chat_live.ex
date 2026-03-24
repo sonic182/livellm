@@ -25,7 +25,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, (enabled && enabled.default_model) || "")
      |> assign(:selected_reasoning_effort, nil)
      |> assign(:waiting, false)
-     |> assign(:streaming, true)
+     |> assign(:stream_mode, true)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
@@ -72,83 +72,54 @@ defmodule LivellmWeb.ChatLive do
       provider_configs: configs
     } = socket.assigns
 
-    chat =
-      chat ||
-        case Chats.create_chat(%{
-               title: String.slice(content, 0, 60),
-               model: model,
-               provider_config_id: provider_id
-             }) do
-          {:ok, c} -> c
-        end
+    chat_result =
+      case chat do
+        nil ->
+          Chats.create_chat(%{
+            title: String.slice(content, 0, 60),
+            model: model,
+            provider_config_id: provider_id
+          })
 
-    {:ok, user_msg} = Chats.create_message(chat, %{role: "user", content: content})
-
-    provider_config = Enum.find(configs, &(&1.id == provider_id))
-    history = Chats.list_messages(chat)
-    pid = self()
-
-    reasoning_effort = socket.assigns.selected_reasoning_effort
-    streaming = socket.assigns.streaming
-
-    Task.start(fn ->
-      try do
-        result =
-          llm_runner().run(provider_config, model, history, reasoning_effort, chat.id,
-            stream: streaming
-          )
-
-        case result do
-          {:ok, %{stream: stream, provider: provider}} when not is_nil(stream) ->
-            Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
-
-            final =
-              stream
-              |> Stream.map(fn data ->
-                Logger.debug("[debug][stream] data=#{inspect(data)}")
-
-                data
-              end)
-              |> LlmComposer.parse_stream_response(provider)
-              |> Enum.reduce(
-                %{
-                  content: "",
-                  reasoning: "",
-                  reasoning_details: [],
-                  usage: nil,
-                  usage_raw: nil,
-                  provider: provider
-                },
-                &handle_stream_chunk(&1, &2, pid, chat)
-              )
-
-            Logger.debug(
-              "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
-            )
-
-            send(pid, {:stream_done, chat, final})
-
-          other ->
-            send(pid, {:llm_response, chat, other})
-        end
-      rescue
-        e ->
-          Logger.error(
-            "[chat_live] task crashed chat_id=#{chat.id} error=#{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-          )
-
-          send(pid, {:llm_response, chat, {:error, e}})
+        existing ->
+          {:ok, existing}
       end
-    end)
 
-    {:noreply,
-     socket
-     |> assign(:chat, chat)
-     |> assign(:current_chat_id, chat.id)
-     |> assign(:chats, Chats.list_chats())
-     |> assign(:waiting, true)
-     |> stream_insert(:messages, user_msg)
-     |> push_patch(to: ~p"/chats/#{chat.id}")}
+    case chat_result do
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not start chat.")}
+
+      {:ok, chat} ->
+        {:ok, user_msg} = Chats.create_message(chat, %{role: "user", content: content})
+
+        provider_config = Enum.find(configs, &(&1.id == provider_id))
+        history = Chats.list_messages(chat)
+        pid = self()
+
+        reasoning_effort = socket.assigns.selected_reasoning_effort
+        stream_mode = socket.assigns.stream_mode
+
+        Task.Supervisor.start_child(Livellm.TaskSupervisor, fn ->
+          run_llm_task(
+            provider_config,
+            model,
+            history,
+            reasoning_effort,
+            chat,
+            stream_mode,
+            pid
+          )
+        end)
+
+        {:noreply,
+         socket
+         |> assign(:chat, chat)
+         |> assign(:current_chat_id, chat.id)
+         |> assign(:chats, Chats.list_chats())
+         |> assign(:waiting, true)
+         |> stream_insert(:messages, user_msg)
+         |> push_patch(to: ~p"/chats/#{chat.id}")}
+    end
   end
 
   def handle_event("send_message", _params, socket) do
@@ -176,19 +147,19 @@ defmodule LivellmWeb.ChatLive do
     new_provider_id = parse_provider_id(params["provider_id"])
     selected_model = resolve_model(params, socket.assigns, new_provider_id)
     reasoning_effort = parse_effort(params["reasoning_effort"])
-    streaming = params["streaming"] == "true"
+    stream_mode = params["streaming"] == "true"
 
     {:noreply,
      socket
      |> assign(:selected_provider_id, new_provider_id)
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
-     |> assign(:streaming, streaming)
+     |> assign(:stream_mode, stream_mode)
      |> push_event("save_chat_settings", %{
        provider_id: new_provider_id,
        model: selected_model,
        reasoning_effort: reasoning_effort,
-       streaming: streaming
+       streaming: stream_mode
      })}
   end
 
@@ -196,7 +167,7 @@ defmodule LivellmWeb.ChatLive do
     provider_id = parse_provider_id_from_restore(params["provider_id"])
     model = params["model"] || ""
     reasoning_effort = parse_effort(params["reasoning_effort"])
-    streaming = Map.get(params, "streaming", true)
+    stream_mode = Map.get(params, "streaming", true)
 
     valid_provider_id =
       if Enum.any?(socket.assigns.provider_configs, &(&1.id == provider_id)),
@@ -208,7 +179,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_provider_id, valid_provider_id)
      |> assign(:selected_model, model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
-     |> assign(:streaming, streaming)}
+     |> assign(:stream_mode, stream_mode)}
   end
 
   defp parse_provider_id(""), do: nil
@@ -291,7 +262,8 @@ defmodule LivellmWeb.ChatLive do
         role: "assistant",
         content: content,
         reasoning: blank_to_nil(reasoning),
-        reasoning_details: blank_list_to_nil(reasoning_details)
+        reasoning_details: blank_list_to_nil(reasoning_details),
+        raw_response: usage_raw
       }
       |> Map.merge(Usage.stream_cost_tracking_attrs(provider, usage, usage_raw))
 
@@ -307,6 +279,70 @@ defmodule LivellmWeb.ChatLive do
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
      )
      |> stream_insert(:messages, assistant_msg)}
+  end
+
+  defp run_llm_task(provider_config, model, history, reasoning_effort, chat, stream_mode, pid) do
+    provider_config
+    |> run_llm_request(model, history, reasoning_effort, chat.id, stream_mode)
+    |> handle_llm_result(chat, pid)
+  rescue
+    error ->
+      Logger.error(
+        "[chat_live] task crashed chat_id=#{chat.id} error=#{Exception.message(error)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+      )
+
+      send(pid, {:llm_response, chat, {:error, error}})
+  end
+
+  defp run_llm_request(
+         provider_config,
+         model,
+         history,
+         reasoning_effort,
+         chat_id,
+         stream_mode
+       ) do
+    llm_runner().run(provider_config, model, history, reasoning_effort, chat_id,
+      stream: stream_mode
+    )
+  end
+
+  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, pid)
+       when not is_nil(stream) do
+    Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
+
+    final = run_stream(stream, provider, chat, pid)
+
+    Logger.debug(
+      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.usage)}"
+    )
+
+    send(pid, {:stream_done, chat, final})
+  end
+
+  defp handle_llm_result(result, chat, pid) do
+    send(pid, {:llm_response, chat, result})
+  end
+
+  defp run_stream(stream, provider, chat, pid) do
+    stream
+    |> Stream.map(fn data ->
+      Logger.debug("[debug][stream] data=#{inspect(data)}")
+
+      data
+    end)
+    |> LlmComposer.parse_stream_response(provider)
+    |> Enum.reduce(
+      %{
+        content: "",
+        reasoning: "",
+        reasoning_details: [],
+        usage: nil,
+        usage_raw: nil,
+        provider: provider
+      },
+      &handle_stream_chunk(&1, &2, pid, chat)
+    )
   end
 
   defp handle_stream_chunk(%{type: :text_delta} = chunk, acc, pid, chat) do

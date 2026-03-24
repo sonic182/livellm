@@ -54,8 +54,13 @@ defmodule LivellmWeb.ChatComponents do
                   chat.id != @current_chat_id && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
                 ]}
               >
-                <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0" />
-                <span class="truncate">{chat.title}</span>
+                <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0 mt-0.5" />
+                <div class="flex flex-col min-w-0">
+                  <span class="truncate">{chat.title}</span>
+                  <span class="text-xs text-zinc-500 group-hover:text-zinc-400">
+                    {Calendar.strftime(chat.inserted_at, "%b %-d %H:%M")}
+                  </span>
+                </div>
               </.link>
               <button
                 phx-click="delete_chat"

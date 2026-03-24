@@ -58,7 +58,7 @@ defmodule Livellm.MixProject do
        depth: 1},
       {:jason, "~> 1.2"},
       {:lazy_html, ">= 0.1.0", only: :test},
-      {:llm_composer, github: "doofinder/llm_composer", branch: "feature/reasoning_resending"},
+      {:llm_composer, github: "doofinder/llm_composer", branch: "feature/cost_tracking_cache"},
       {:phoenix, "~> 1.8.5"},
       {:phoenix_ecto, "~> 4.5"},
       {:phoenix_html, "~> 4.1"},

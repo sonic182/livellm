@@ -11,7 +11,10 @@ defmodule Livellm.Usage do
           input_tokens: non_neg_integer(),
           output_tokens: non_neg_integer(),
           total_tokens: non_neg_integer(),
+          cached_tokens: non_neg_integer(),
           reasoning_tokens: non_neg_integer(),
+          input_cost: Decimal.t() | nil,
+          output_cost: Decimal.t() | nil,
           total_cost: Decimal.t() | nil,
           currency: String.t() | nil,
           cost_tracked?: boolean()
@@ -23,7 +26,10 @@ defmodule Livellm.Usage do
       input_tokens: 0,
       output_tokens: 0,
       total_tokens: 0,
+      cached_tokens: 0,
       reasoning_tokens: 0,
+      input_cost: nil,
+      output_cost: nil,
       total_cost: nil,
       currency: nil,
       cost_tracked?: false
@@ -37,21 +43,16 @@ defmodule Livellm.Usage do
 
   @spec merge_chat_metrics(chat_metrics(), map()) :: chat_metrics()
   def merge_chat_metrics(metrics, %{role: "assistant"} = message) do
-    metrics =
-      %{
-        metrics
-        | input_tokens: metrics.input_tokens + (message.input_tokens || 0),
-          output_tokens: metrics.output_tokens + (message.output_tokens || 0),
-          total_tokens: metrics.total_tokens + (message.total_tokens || 0),
-          reasoning_tokens: metrics.reasoning_tokens + (message.reasoning_tokens || 0)
-      }
+    metrics = merge_assistant_tokens(metrics, message)
 
     case message.total_cost do
       %Decimal{} = total_cost ->
         %{
           metrics
           | total_cost: Decimal.add(metrics.total_cost || Decimal.new(0), total_cost),
-            currency: metrics.currency || message.cost_currency,
+            input_cost: add_cost(metrics.input_cost, Map.get(message, :input_cost)),
+            output_cost: add_cost(metrics.output_cost, Map.get(message, :output_cost)),
+            currency: metrics.currency || Map.get(message, :cost_currency),
             cost_tracked?: true
         }
 
@@ -61,6 +62,17 @@ defmodule Livellm.Usage do
   end
 
   def merge_chat_metrics(metrics, _message), do: metrics
+
+  defp merge_assistant_tokens(metrics, message) do
+    %{
+      metrics
+      | input_tokens: metrics.input_tokens + (message.input_tokens || 0),
+        output_tokens: metrics.output_tokens + (message.output_tokens || 0),
+        total_tokens: metrics.total_tokens + (message.total_tokens || 0),
+        cached_tokens: metrics.cached_tokens + (message.cached_tokens || 0),
+        reasoning_tokens: metrics.reasoning_tokens + (message.reasoning_tokens || 0)
+    }
+  end
 
   @spec cost_tracking_attrs(LlmComposer.LlmResponse.t()) :: map()
   def cost_tracking_attrs(llm_response) do
@@ -72,13 +84,15 @@ defmodule Livellm.Usage do
       input_tokens: input_tokens,
       output_tokens: output_tokens,
       total_tokens: token_total(cost_info, input_tokens, output_tokens),
+      cached_tokens: cached_tokens(cost_info, llm_response.raw, llm_response.cached_tokens),
       reasoning_tokens: reasoning_tokens(nil, llm_response.raw),
       input_cost: cost_value(cost_info, :input_cost),
       output_cost: cost_value(cost_info, :output_cost),
       total_cost: cost_value(cost_info, :total_cost),
       cost_currency: cost_value(cost_info, :currency),
       provider_name: provider_name(cost_info, llm_response.provider),
-      provider_model: provider_model(cost_info, llm_response.raw)
+      provider_model: provider_model(cost_info, llm_response.raw),
+      provider_response_id: provider_response_id(llm_response)
     }
   end
 
@@ -92,13 +106,15 @@ defmodule Livellm.Usage do
       input_tokens: token_value(cost_info, :input_tokens, input_tokens),
       output_tokens: token_value(cost_info, :output_tokens, output_tokens),
       total_tokens: token_total(cost_info, input_tokens, output_tokens),
+      cached_tokens: cached_tokens(cost_info, raw_chunk, usage && Map.get(usage, :cached_tokens)),
       reasoning_tokens: reasoning_tokens(usage, raw_chunk),
       input_cost: cost_value(cost_info, :input_cost),
       output_cost: cost_value(cost_info, :output_cost),
       total_cost: cost_value(cost_info, :total_cost),
       cost_currency: cost_value(cost_info, :currency),
       provider_name: stream_provider_name(provider, cost_info, raw_chunk),
-      provider_model: stream_provider_model(cost_info, raw_chunk)
+      provider_model: stream_provider_model(cost_info, raw_chunk),
+      provider_response_id: stream_provider_response_id(raw_chunk)
     }
   end
 
@@ -116,25 +132,74 @@ defmodule Livellm.Usage do
 
   def format_reasoning_tokens(_metrics), do: nil
 
+  @spec format_cached_tokens(chat_metrics()) :: String.t() | nil
+  def format_cached_tokens(%{cached_tokens: cached_tokens}) when cached_tokens > 0 do
+    "#{cached_tokens} cached"
+  end
+
+  def format_cached_tokens(_metrics), do: nil
+
   @spec format_total_cost(chat_metrics()) :: String.t() | nil
   def format_total_cost(%{cost_tracked?: true, total_cost: %Decimal{} = total_cost} = metrics) do
+    format_cost(total_cost, metrics.currency)
+  end
+
+  def format_total_cost(_metrics), do: nil
+
+  @spec format_input_cost(chat_metrics()) :: String.t() | nil
+  def format_input_cost(%{cost_tracked?: true, input_cost: %Decimal{} = input_cost} = metrics) do
+    format_cost(input_cost, metrics.currency)
+  end
+
+  def format_input_cost(_metrics), do: nil
+
+  @spec format_output_cost(chat_metrics()) :: String.t() | nil
+  def format_output_cost(%{cost_tracked?: true, output_cost: %Decimal{} = output_cost} = metrics) do
+    format_cost(output_cost, metrics.currency)
+  end
+
+  def format_output_cost(_metrics), do: nil
+
+  @spec uncached_input_tokens(chat_metrics()) :: non_neg_integer()
+  def uncached_input_tokens(%{input_tokens: input_tokens, cached_tokens: cached_tokens}) do
+    max(input_tokens - cached_tokens, 0)
+  end
+
+  @spec token_breakdown(chat_metrics()) :: map()
+  def token_breakdown(metrics) do
+    %{
+      input_tokens: metrics.input_tokens,
+      cached_tokens: metrics.cached_tokens,
+      uncached_input_tokens: uncached_input_tokens(metrics),
+      output_tokens: metrics.output_tokens,
+      reasoning_tokens: metrics.reasoning_tokens,
+      input_cost: format_input_cost(metrics),
+      output_cost: format_output_cost(metrics),
+      total_cost: format_total_cost(metrics)
+    }
+  end
+
+  defp format_cost(%Decimal{} = amount, currency) do
     amount =
-      total_cost
+      amount
       |> Decimal.round(6)
       |> Decimal.normalize()
       |> Decimal.to_string(:normal)
 
-    case metrics.currency do
+    case currency do
       nil -> "$#{amount}"
       "USD" -> "$#{amount}"
       currency -> "#{currency} #{amount}"
     end
   end
 
-  def format_total_cost(_metrics), do: nil
-
   defp token_value(nil, _field, fallback), do: fallback
   defp token_value(cost_info, field, _fallback), do: Map.get(cost_info, field)
+
+  defp add_cost(nil, nil), do: nil
+  defp add_cost(%Decimal{} = left, nil), do: left
+  defp add_cost(nil, %Decimal{} = right), do: right
+  defp add_cost(%Decimal{} = left, %Decimal{} = right), do: Decimal.add(left, right)
 
   defp token_total(nil, nil, nil), do: nil
 
@@ -142,6 +207,35 @@ defmodule Livellm.Usage do
     do: (input_tokens || 0) + (output_tokens || 0)
 
   defp token_total(cost_info, _input_tokens, _output_tokens), do: cost_info.total_tokens
+
+  defp cached_tokens(%CostInfo{cached_tokens: cached_tokens}, _raw, _fallback)
+       when is_integer(cached_tokens),
+       do: cached_tokens
+
+  defp cached_tokens(
+         _cost_info,
+         %{"usage" => %{"input_tokens_details" => %{"cached_tokens" => cached_tokens}}},
+         _fallback
+       )
+       when is_integer(cached_tokens),
+       do: cached_tokens
+
+  defp cached_tokens(
+         _cost_info,
+         %{
+           "response" => %{
+             "usage" => %{"input_tokens_details" => %{"cached_tokens" => cached_tokens}}
+           }
+         },
+         _fallback
+       )
+       when is_integer(cached_tokens),
+       do: cached_tokens
+
+  defp cached_tokens(_cost_info, _raw, cached_tokens) when is_integer(cached_tokens),
+    do: cached_tokens
+
+  defp cached_tokens(_cost_info, _raw, _fallback), do: nil
 
   defp reasoning_tokens(_usage, %{
          "usage" => %{
@@ -175,6 +269,17 @@ defmodule Livellm.Usage do
   defp provider_model(nil, _raw), do: nil
   defp provider_model(cost_info, _raw), do: cost_info.provider_model
 
+  defp provider_response_id(%{response_id: response_id}) when is_binary(response_id),
+    do: response_id
+
+  defp provider_response_id(%{raw: %{"id" => response_id}}) when is_binary(response_id),
+    do: response_id
+
+  defp provider_response_id(%{raw: %{"response" => %{"id" => response_id}}})
+       when is_binary(response_id), do: response_id
+
+  defp provider_response_id(_llm_response), do: nil
+
   defp stream_cost_info(:open_router, usage, raw_chunk)
        when is_map(usage) and is_map(raw_chunk) do
     model = Map.get(raw_chunk, "model")
@@ -196,16 +301,21 @@ defmodule Livellm.Usage do
     end
   end
 
-  defp stream_cost_info(:open_ai_responses, usage, %{"response" => %{"model" => model}})
+  defp stream_cost_info(
+         :open_ai_responses,
+         usage,
+         %{"response" => %{"model" => model}} = raw_chunk
+       )
        when is_map(usage) and is_binary(model) do
     pricing = Pricing.fetch_pricing(:open_ai_responses, model: model)
+    cached_tokens = cached_tokens(nil, raw_chunk, Map.get(usage, :cached_tokens))
 
     CostInfo.new(
       :open_ai_responses,
       model,
       usage.input_tokens || 0,
       usage.output_tokens || 0,
-      pricing || []
+      Keyword.merge(pricing || [], cached_tokens: cached_tokens)
     )
   end
 
@@ -233,4 +343,13 @@ defmodule Livellm.Usage do
        do: model
 
   defp stream_provider_model(_cost_info, _raw_chunk), do: nil
+
+  defp stream_provider_response_id(%{"response" => %{"id" => response_id}})
+       when is_binary(response_id),
+       do: response_id
+
+  defp stream_provider_response_id(%{"id" => response_id}) when is_binary(response_id),
+    do: response_id
+
+  defp stream_provider_response_id(_raw_chunk), do: nil
 end

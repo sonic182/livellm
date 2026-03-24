@@ -14,6 +14,7 @@ defmodule Livellm.Chats.Message do
     field :input_tokens, :integer
     field :output_tokens, :integer
     field :total_tokens, :integer
+    field :cached_tokens, :integer
     field :reasoning_tokens, :integer
     field :input_cost, :decimal
     field :output_cost, :decimal
@@ -21,6 +22,7 @@ defmodule Livellm.Chats.Message do
     field :cost_currency, :string
     field :provider_name, :string
     field :provider_model, :string
+    field :provider_response_id, :string
     belongs_to :chat, Chat
 
     timestamps(type: :utc_datetime)
@@ -36,13 +38,15 @@ defmodule Livellm.Chats.Message do
     :input_tokens,
     :output_tokens,
     :total_tokens,
+    :cached_tokens,
     :reasoning_tokens,
     :input_cost,
     :output_cost,
     :total_cost,
     :cost_currency,
     :provider_name,
-    :provider_model
+    :provider_model,
+    :provider_response_id
   ]
 
   @doc false
