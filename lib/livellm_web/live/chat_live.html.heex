@@ -12,7 +12,9 @@
       >
         <div class="flex min-w-0 items-center gap-3">
           <h1 class="text-sm font-medium text-zinc-400 shrink-0 truncate">
-            {(@chat && @chat.title) || "New Chat"}
+            {if @chat && @chat.title && String.length(@chat.title) > 25,
+              do: String.slice(@chat.title, 0, 25) <> "...",
+              else: (@chat && @chat.title) || "New Chat"}
           </h1>
 
           <%= if token_label = Usage.format_total_tokens(@chat_metrics) do %>
