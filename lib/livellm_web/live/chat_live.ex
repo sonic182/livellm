@@ -71,6 +71,9 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:chat, chat)
      |> assign(:current_chat_id, chat.id)
      |> assign(:subscribed_chat_id, chat.id)
+     |> assign(:selected_provider_id, chat.provider_config_id)
+     |> assign(:selected_model, chat.model)
+     |> assign(:selected_reasoning_effort, chat.reasoning_effort)
      |> assign(:waiting, waiting)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
@@ -98,6 +101,7 @@ defmodule LivellmWeb.ChatLive do
           Chats.create_chat(%{
             title: String.slice(content, 0, 60),
             model: model,
+            reasoning_effort: socket.assigns.selected_reasoning_effort,
             provider_config_id: provider_id
           })
 
@@ -169,38 +173,33 @@ defmodule LivellmWeb.ChatLive do
     reasoning_effort = parse_effort(params["reasoning_effort"])
     stream_mode = params["streaming"] == "true"
 
+    socket =
+      if socket.assigns.chat do
+        {:ok, updated_chat} =
+          Chats.update_chat(socket.assigns.chat, %{
+            model: selected_model,
+            reasoning_effort: reasoning_effort,
+            provider_config_id: new_provider_id
+          })
+
+        assign(socket, :chat, updated_chat)
+      else
+        socket
+      end
+
     {:noreply,
      socket
      |> assign(:selected_provider_id, new_provider_id)
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
-     |> push_event("save_chat_settings", %{
-       provider_id: new_provider_id,
-       model: selected_model,
-       reasoning_effort: reasoning_effort,
-       streaming: stream_mode
-     })}
+     |> push_event("save_chat_settings", %{streaming: stream_mode})}
   end
 
   @impl true
   def handle_event("restore_chat_settings", params, socket) do
-    provider_id = parse_provider_id(params["provider_id"])
-    model = params["model"] || ""
-    reasoning_effort = parse_effort(params["reasoning_effort"])
     stream_mode = Map.get(params, "streaming", true) in [true, "true"]
-
-    valid_provider_id =
-      if Enum.any?(socket.assigns.provider_configs, &(&1.id == provider_id)),
-        do: provider_id,
-        else: nil
-
-    {:noreply,
-     socket
-     |> assign(:selected_provider_id, valid_provider_id)
-     |> assign(:selected_model, model)
-     |> assign(:selected_reasoning_effort, reasoning_effort)
-     |> assign(:stream_mode, stream_mode)}
+    {:noreply, assign(socket, :stream_mode, stream_mode)}
   end
 
   @impl true

@@ -306,27 +306,18 @@
     </div>
   </div>
 
-  <%!-- Persist chat settings (provider, model, reasoning effort) per chat in localStorage --%>
+  <%!-- Persist stream mode globally in localStorage --%>
   <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatSettings">
-    const key = (chatId) => `livellm:chat_settings:${chatId || "new"}`
+    const KEY = "livellm:stream_mode"
     export default {
-      chatId() { return this.el.dataset.chatId || "new" },
       mounted() {
-        this.handleEvent("save_chat_settings", (settings) => {
-          localStorage.setItem(key(this.chatId()), JSON.stringify(settings))
+        this.handleEvent("save_chat_settings", ({ streaming }) => {
+          localStorage.setItem(KEY, JSON.stringify({ streaming }))
         })
-        this._lastChatId = this.chatId()
-        this.restore(this.chatId())
+        this.restore()
       },
-      updated() {
-        const currentChatId = this.chatId()
-        if (currentChatId !== this._lastChatId) {
-          this._lastChatId = currentChatId
-          this.restore(currentChatId)
-        }
-      },
-      restore(chatId) {
-        const saved = localStorage.getItem(key(chatId))
+      restore() {
+        const saved = localStorage.getItem(KEY)
         if (saved) {
           try { this.pushEvent("restore_chat_settings", JSON.parse(saved)) } catch (_) {}
         }
