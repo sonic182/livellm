@@ -229,7 +229,9 @@ defmodule LivellmWeb.ChatComponents do
       sanitize: Document.default_sanitize_options(),
       streaming: streaming,
       syntax_highlight: [
-        formatter: {:html_inline, theme: "onedark"}
+        formatter:
+          {:html_multi_themes,
+           themes: [light: "github_light", dark: "github_dark"], default_theme: "light-dark()"}
       ]
     ]
   end
