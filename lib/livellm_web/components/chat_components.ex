@@ -18,14 +18,14 @@ defmodule LivellmWeb.ChatComponents do
     ~H"""
     <aside
       id="sidebar"
-      class="flex flex-col w-64 h-full bg-zinc-900 border-r border-zinc-800 shrink-0"
+      class="flex flex-col w-64 h-full bg-base-200 border-r border-base-300 shrink-0"
     >
       <%!-- Brand --%>
-      <div class="flex items-center gap-2.5 px-4 py-4 border-b border-zinc-800">
+      <div class="flex items-center gap-2.5 px-4 py-4 border-b border-base-300">
         <div class="size-7 rounded-lg bg-violet-600 flex items-center justify-center shrink-0">
           <.icon name="hero-cpu-chip" class="size-4 text-white" />
         </div>
-        <span class="font-semibold text-sm tracking-tight text-zinc-100">LiveLLM</span>
+        <span class="font-semibold text-sm tracking-tight text-base-content">LiveLLM</span>
       </div>
 
       <%!-- New Chat --%>
@@ -33,7 +33,7 @@ defmodule LivellmWeb.ChatComponents do
         <.link
           navigate={~p"/"}
           id="new-chat-btn"
-          class="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors duration-150"
+          class="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors duration-150"
         >
           <.icon name="hero-pencil-square" class="size-4 shrink-0" /> New Chat
         </.link>
@@ -41,9 +41,11 @@ defmodule LivellmWeb.ChatComponents do
 
       <%!-- Chats list --%>
       <nav id="chats-nav" class="flex-1 overflow-y-auto px-3 py-2">
-        <p class="px-3 py-2 text-xs font-medium text-zinc-500 uppercase tracking-wider">Recent</p>
+        <p class="px-3 py-2 text-xs font-medium text-base-content/40 uppercase tracking-wider">
+          Recent
+        </p>
         <%= if @chats == [] do %>
-          <p class="px-3 py-2 text-xs text-zinc-600 italic">No chats yet</p>
+          <p class="px-3 py-2 text-xs text-base-content/30 italic">No chats yet</p>
         <% else %>
           <%= for chat <- @chats do %>
             <div id={"chat-item-#{chat.id}"} class="group relative flex items-center rounded-lg">
@@ -52,14 +54,15 @@ defmodule LivellmWeb.ChatComponents do
                 id={"chat-#{chat.id}"}
                 class={[
                   "flex items-center gap-2 w-full px-3 py-2 pr-8 rounded-lg text-sm truncate transition-colors duration-150",
-                  chat.id == @current_chat_id && "bg-zinc-800 text-zinc-100",
-                  chat.id != @current_chat_id && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                  chat.id == @current_chat_id && "bg-base-300 text-base-content",
+                  chat.id != @current_chat_id &&
+                    "text-base-content/60 hover:text-base-content hover:bg-base-300"
                 ]}
               >
                 <.icon name="hero-chat-bubble-left-ellipsis" class="size-4 shrink-0 mt-0.5" />
                 <div class="flex flex-col min-w-0">
                   <span class="truncate">{chat.title}</span>
-                  <span class="text-xs text-zinc-500 group-hover:text-zinc-400">
+                  <span class="text-xs text-base-content/40 group-hover:text-base-content/60">
                     {Calendar.strftime(chat.inserted_at, "%b %-d %H:%M")}
                   </span>
                 </div>
@@ -69,7 +72,7 @@ defmodule LivellmWeb.ChatComponents do
                 phx-value-id={chat.id}
                 id={"delete-chat-#{chat.id}"}
                 data-confirm="Delete this chat? This cannot be undone."
-                class="absolute right-1.5 p-1 rounded opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-all duration-150"
+                class="absolute right-1.5 p-1 rounded opacity-0 group-hover:opacity-100 text-base-content/40 hover:text-red-400 hover:bg-base-300 transition-all duration-150"
                 title="Delete chat"
               >
                 <.icon name="hero-trash" class="size-3.5" />
@@ -80,14 +83,15 @@ defmodule LivellmWeb.ChatComponents do
       </nav>
 
       <%!-- Bottom: Settings --%>
-      <div class="border-t border-zinc-800 px-3 py-3">
+      <div class="border-t border-base-300 px-3 py-3">
         <.link
           navigate={~p"/settings"}
           id="settings-link"
           class={[
             "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors duration-150",
-            @current_page == :settings && "bg-zinc-800 text-zinc-100",
-            @current_page != :settings && "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+            @current_page == :settings && "bg-base-300 text-base-content",
+            @current_page != :settings &&
+              "text-base-content/60 hover:text-base-content hover:bg-base-300"
           ]}
         >
           <.icon name="hero-cog-6-tooth" class="size-4 shrink-0" /> Settings
@@ -117,7 +121,7 @@ defmodule LivellmWeb.ChatComponents do
       <div class={[
         "size-8 rounded-full shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5",
         @message.role == "assistant" && "bg-violet-700 text-white",
-        @message.role == "user" && "bg-zinc-700 text-zinc-300"
+        @message.role == "user" && "bg-base-300 text-base-content"
       ]}>
         <%= if @message.role == "assistant" do %>
           <.icon name="hero-cpu-chip" class="size-4" />
@@ -133,23 +137,26 @@ defmodule LivellmWeb.ChatComponents do
                  ((@message.reasoning_tokens || 0) > 0)) do %>
           <details
             id={"#{@id}-reasoning"}
-            class="rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            class="chat-reasoning rounded-2xl rounded-tl-sm border px-4 py-3 text-sm"
           >
             <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
-              <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+              <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
                 Thinking
               </span>
               <%= if (@message.reasoning_tokens || 0) > 0 do %>
                 <span
                   id={"#{@id}-reasoning-tokens"}
-                  class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-200"
+                  class="chat-reasoning rounded-full border px-2 py-0.5 text-[11px] font-medium"
                 >
                   {@message.reasoning_tokens} reasoning
                 </span>
               <% end %>
             </summary>
             <%= if is_binary(@message.reasoning) and @message.reasoning != "" do %>
-              <div id={"#{@id}-reasoning-content"} class="mt-3 whitespace-pre-wrap leading-relaxed">
+              <div
+                id={"#{@id}-reasoning-content"}
+                class="mt-3 whitespace-pre-wrap leading-relaxed"
+              >
                 {@message.reasoning}
               </div>
             <% end %>
@@ -159,7 +166,7 @@ defmodule LivellmWeb.ChatComponents do
         <div class={[
           "rounded-2xl text-sm",
           @message.role == "assistant" &&
-            "bg-zinc-800 text-zinc-100 rounded-tl-sm px-4 py-3 leading-relaxed",
+            "bg-base-200 text-base-content rounded-tl-sm px-4 py-3 leading-relaxed",
           @message.role == "user" && "bg-violet-600 text-white rounded-tr-sm px-3 py-2 break-words"
         ]}>
           <%= if @message.role == "assistant" do %>
@@ -222,7 +229,9 @@ defmodule LivellmWeb.ChatComponents do
       sanitize: Document.default_sanitize_options(),
       streaming: streaming,
       syntax_highlight: [
-        formatter: {:html_inline, theme: "onedark"}
+        formatter:
+          {:html_multi_themes,
+           themes: [light: "github_light", dark: "github_dark"], default_theme: "light-dark()"}
       ]
     ]
   end

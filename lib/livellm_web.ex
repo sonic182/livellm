@@ -86,6 +86,7 @@ defmodule LivellmWeb do
       import Phoenix.HTML
       # Core UI components
       import LivellmWeb.CoreComponents
+      import LivellmWeb.AppComponents
 
       # Common modules used in templates
       alias LivellmWeb.Layouts

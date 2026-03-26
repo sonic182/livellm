@@ -4,14 +4,14 @@
     <.sidebar current_page={:chat} chats={@chats} current_chat_id={@current_chat_id} />
 
     <%!-- Main chat area --%>
-    <div class="flex flex-col flex-1 min-w-0">
+    <div class="flex flex-col flex-1 min-w-0 bg-base-100 text-base-content">
       <%!-- Chat header --%>
       <header
         id="chat-header"
-        class="flex items-center justify-between gap-4 px-6 py-3 border-b border-zinc-800 shrink-0 bg-zinc-950"
+        class="flex items-center justify-between gap-4 px-6 py-3 border-b border-base-300 shrink-0 bg-base-100"
       >
         <div class="flex min-w-0 items-center gap-3">
-          <h1 class="text-sm font-medium text-zinc-400 shrink-0 truncate">
+          <h1 class="text-sm font-medium text-base-content/60 shrink-0 truncate">
             {if @chat && @chat.title && String.length(@chat.title) > 25,
               do: String.slice(@chat.title, 0, 25) <> "...",
               else: (@chat && @chat.title) || "New Chat"}
@@ -23,25 +23,27 @@
               <div id="chat-total-tokens-wrapper" class="group relative">
                 <span
                   id="chat-total-tokens"
-                  class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-200"
+                  class="chat-metric-badge chat-metric-badge--tokens"
                 >
                   {token_label}
                 </span>
 
                 <div
                   id="chat-tokens-popover"
-                  class="pointer-events-none invisible absolute left-0 top-full z-20 mt-2 w-64 rounded-2xl border border-zinc-700 bg-zinc-900/95 p-3 text-left text-[11px] text-zinc-200 opacity-0 shadow-2xl shadow-black/30 transition duration-150 group-hover:visible group-hover:opacity-100"
+                  class="pointer-events-none invisible absolute left-0 top-full z-20 mt-2 w-64 rounded-2xl border border-base-300 bg-base-200/95 p-3 text-left text-[11px] text-base-content opacity-0 shadow-2xl shadow-black/10 transition duration-150 group-hover:visible group-hover:opacity-100"
                 >
-                  <div class="mb-2 flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                    <span class="font-semibold uppercase tracking-[0.18em] text-zinc-400">
+                  <div class="mb-2 flex items-center justify-between gap-3 border-b border-base-300 pb-2">
+                    <span class="font-semibold uppercase tracking-[0.18em] text-base-content/60">
                       Token Breakdown
                     </span>
-                    <span class="text-emerald-300">{token_label}</span>
+                    <span class="chat-metric-badge-value chat-metric-badge-value--tokens">
+                      {token_label}
+                    </span>
                   </div>
 
                   <div class="space-y-1.5">
                     <div class="flex items-center justify-between gap-3">
-                      <span class="text-zinc-400">Input</span>
+                      <span class="text-base-content/60">Input</span>
                       <span>{token_breakdown.input_tokens}</span>
                     </div>
                     <div class="flex items-center justify-between gap-3">
@@ -62,7 +64,7 @@
                     </div>
                   </div>
 
-                  <div class="mt-3 space-y-1.5 border-t border-zinc-800 pt-2">
+                  <div class="mt-3 space-y-1.5 border-t border-base-300 pt-2">
                     <div class="flex items-center justify-between gap-3">
                       <span class="text-zinc-400">Input cost</span>
                       <span>{token_breakdown.input_cost || "—"}</span>
@@ -71,7 +73,7 @@
                       <span class="text-zinc-400">Output cost</span>
                       <span>{token_breakdown.output_cost || "—"}</span>
                     </div>
-                    <div class="flex items-center justify-between gap-3 font-medium text-zinc-100">
+                    <div class="flex items-center justify-between gap-3 font-medium text-base-content">
                       <span>Total cost</span>
                       <span>{token_breakdown.total_cost || "—"}</span>
                     </div>
@@ -82,7 +84,7 @@
               <%= if cost_label = Usage.format_total_cost(@chat_metrics) do %>
                 <span
                   id="chat-total-cost"
-                  class="inline-flex items-center rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 font-medium text-sky-200"
+                  class="chat-metric-badge chat-metric-badge--cost"
                 >
                   {cost_label}
                 </span>
@@ -91,7 +93,7 @@
               <%= if reasoning_label = Usage.format_reasoning_tokens(@chat_metrics) do %>
                 <span
                   id="chat-reasoning-tokens"
-                  class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-200"
+                  class="chat-metric-badge chat-metric-badge--reasoning"
                 >
                   {reasoning_label}
                 </span>
@@ -100,7 +102,7 @@
               <%= if cached_label = Usage.format_cached_tokens(@chat_metrics) do %>
                 <span
                   id="chat-cached-tokens"
-                  class="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 font-medium text-cyan-200"
+                  class="chat-metric-badge chat-metric-badge--cached"
                 >
                   {cached_label}
                 </span>
@@ -113,7 +115,7 @@
           <.link
             navigate={~p"/settings"}
             id="no-providers-link"
-            class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            class="text-xs text-base-content/50 hover:text-base-content/80 transition-colors"
           >
             No providers configured — go to Settings
           </.link>
@@ -123,58 +125,50 @@
             phx-change="update_chat_settings"
             phx-hook=".ChatSettings"
             data-chat-id={@current_chat_id}
-            class="flex items-center gap-2 shrink-0"
+            class="flex items-start gap-2 shrink-0"
           >
-            <select
+            <.select_input
               id="provider-select"
               name="provider_id"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
-            >
-              <option value="">Select provider...</option>
-              <%= for p <- @provider_configs do %>
-                <option value={p.id} selected={@selected_provider_id == p.id}>
-                  {p.label} ({p.provider})
-                </option>
-              <% end %>
-            </select>
+              value={@selected_provider_id}
+              prompt="Select provider..."
+              options={Enum.map(@provider_configs, &{"#{&1.label} (#{&1.provider})", &1.id})}
+              density={:compact}
+              class="w-44"
+              input_class="cursor-pointer"
+            />
 
-            <input
+            <.text_input
               id="model-input"
-              type="text"
               name="model"
               value={@selected_model}
               placeholder="Model..."
               phx-debounce="300"
               phx-hook=".AutosizeInput"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors min-w-16"
+              density={:compact}
+              class="w-32"
+              input_class="min-w-16"
             />
 
-            <select
+            <.select_input
               id="reasoning-effort-select"
               name="reasoning_effort"
-              class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors cursor-pointer"
-            >
-              <option value="">No reasoning</option>
-              <%= for effort <- ~w(minimal low medium high xhigh) do %>
-                <option value={effort} selected={@selected_reasoning_effort == effort}>
-                  {effort}
-                </option>
-              <% end %>
-            </select>
+              value={@selected_reasoning_effort}
+              prompt="No reasoning"
+              options={Enum.map(~w(minimal low medium high xhigh), &{&1, &1})}
+              density={:compact}
+              class="w-32"
+              input_class="cursor-pointer"
+            />
 
-            <label
-              id="streaming-label"
-              class="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none"
-            >
-              <input
-                id="streaming-toggle"
-                type="checkbox"
-                name="streaming"
-                value="true"
-                checked={@stream_mode}
-                class="accent-violet-500 cursor-pointer"
-              /> Stream
-            </label>
+            <.checkbox_input
+              id="streaming-toggle"
+              name="streaming"
+              checked={@stream_mode}
+              label="Stream"
+              density={:compact}
+              class="pt-1"
+            />
           </form>
         <% end %>
       </header>
@@ -223,12 +217,12 @@
               <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-amber-600/80 text-white mt-0.5">
                 <.icon name="hero-light-bulb" class="size-4" />
               </div>
-              <div class="max-w-[72%] rounded-2xl rounded-tl-sm border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
-                <div class="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+              <div class="chat-reasoning max-w-[72%] rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed">
+                <div class="chat-reasoning-label mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
                   <span>Thinking</span>
                 </div>
                 <div id="streaming-reasoning-content" class="whitespace-pre-wrap">
-                  {@streaming_reasoning}<span class="inline-block w-0.5 h-4 bg-amber-200/60 animate-pulse ml-0.5 align-middle"></span>
+                  {@streaming_reasoning}<span class="chat-reasoning-cursor inline-block w-0.5 h-4 animate-pulse ml-0.5 align-middle"></span>
                 </div>
               </div>
             </div>
@@ -240,14 +234,14 @@
                 <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
                   <.icon name="hero-cpu-chip" class="size-4" />
                 </div>
-                <div class="max-w-[72%] bg-zinc-800 text-zinc-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
+                <div class="max-w-[72%] bg-base-200 text-base-content rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
                   <.markdown_content
                     markdown={@streaming_content}
                     streaming={true}
                     class="chat-markdown"
                   />
                   <div class="mt-2 flex items-center">
-                    <span class="inline-block h-4 w-0.5 animate-pulse bg-zinc-400"></span>
+                    <span class="inline-block h-4 w-0.5 animate-pulse bg-base-content/40"></span>
                   </div>
                 </div>
               </div>
@@ -256,12 +250,12 @@
                 <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
                   <.icon name="hero-cpu-chip" class="size-4" />
                 </div>
-                <div class="bg-zinc-800 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0ms]">
+                <div class="bg-base-200 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+                  <span class="size-1.5 rounded-full bg-base-content/40 animate-bounce [animation-delay:0ms]">
                   </span>
-                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:150ms]">
+                  <span class="size-1.5 rounded-full bg-base-content/40 animate-bounce [animation-delay:150ms]">
                   </span>
-                  <span class="size-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:300ms]">
+                  <span class="size-1.5 rounded-full bg-base-content/40 animate-bounce [animation-delay:300ms]">
                   </span>
                 </div>
               </div>
@@ -271,14 +265,14 @@
       </div>
 
       <%!-- Input bar --%>
-      <div id="input-bar" class="shrink-0 px-4 py-4 border-t border-zinc-800 bg-zinc-950">
+      <div id="input-bar" class="shrink-0 px-4 py-4 border-t border-base-300 bg-base-100">
         <form
           id="message-form"
           phx-submit="send_message"
           class={[
-            "flex items-end gap-3 bg-zinc-900 border rounded-2xl px-4 py-3 transition-colors duration-150",
-            @waiting && "border-zinc-800 opacity-60",
-            !@waiting && "border-zinc-700 focus-within:border-zinc-500"
+            "flex items-end gap-3 bg-base-200 border rounded-2xl px-4 py-3 transition-colors duration-150",
+            @waiting && "border-base-300 opacity-60",
+            !@waiting && "border-base-300 focus-within:border-base-content/30"
           ]}
         >
           <textarea
@@ -287,7 +281,7 @@
             rows="1"
             placeholder={if @waiting, do: "Waiting for response...", else: "Message LiveLLM..."}
             disabled={@waiting}
-            class="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed disabled:cursor-not-allowed"
+            class="flex-1 bg-transparent text-sm text-base-content placeholder-base-content/40 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed disabled:cursor-not-allowed"
             phx-hook=".AutoGrow"
           ></textarea>
           <button
@@ -299,7 +293,7 @@
             <.icon name="hero-arrow-up" class="size-4 text-white" />
           </button>
         </form>
-        <p class="text-center text-xs text-zinc-600 mt-2">
+        <p class="text-center text-xs text-base-content/30 mt-2">
           LiveLLM can make mistakes. Verify important info.
         </p>
       </div>
