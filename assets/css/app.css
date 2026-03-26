@@ -118,6 +118,98 @@
   --ui-segment-bg: color-mix(in oklab, var(--color-base-300) 88%, transparent);
   --ui-segment-active-bg: var(--color-base-100);
   --ui-segment-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+  --chat-metric-tokens-fg: color-mix(in oklab, var(--color-success) 78%, var(--color-base-content));
+  --chat-metric-tokens-bg: color-mix(in oklab, var(--color-success) 14%, transparent);
+  --chat-metric-tokens-border: color-mix(in oklab, var(--color-success) 28%, transparent);
+  --chat-metric-cost-fg: color-mix(in oklab, var(--color-info) 78%, var(--color-base-content));
+  --chat-metric-cost-bg: color-mix(in oklab, var(--color-info) 14%, transparent);
+  --chat-metric-cost-border: color-mix(in oklab, var(--color-info) 28%, transparent);
+  --chat-metric-reasoning-fg: color-mix(in oklab, var(--color-warning) 82%, var(--color-base-content));
+  --chat-metric-reasoning-bg: color-mix(in oklab, var(--color-warning) 18%, transparent);
+  --chat-metric-reasoning-border: color-mix(in oklab, var(--color-warning) 30%, transparent);
+  --chat-metric-cached-fg: color-mix(in oklab, var(--color-info) 70%, var(--color-base-content));
+  --chat-metric-cached-bg: color-mix(in oklab, var(--color-info) 12%, transparent);
+  --chat-metric-cached-border: color-mix(in oklab, var(--color-info) 24%, transparent);
+  --chat-reasoning-fg: color-mix(in oklab, var(--color-warning) 80%, var(--color-base-content));
+  --chat-reasoning-label-fg: color-mix(in oklab, var(--color-warning) 68%, var(--color-base-content));
+  --chat-reasoning-bg: color-mix(in oklab, var(--color-warning) 12%, var(--color-base-100));
+  --chat-reasoning-border: color-mix(in oklab, var(--color-warning) 22%, var(--color-base-300));
+  --chat-reasoning-cursor: color-mix(in oklab, var(--color-warning) 72%, var(--color-base-content));
+  --chat-markdown-fg: #424242;
+  --chat-markdown-link: color-mix(in oklab, var(--color-info) 82%, var(--color-base-content));
+  --chat-markdown-quote: color-mix(in oklab, var(--color-base-content) 68%, transparent);
+  --chat-markdown-quote-border: color-mix(in oklab, var(--color-base-content) 18%, var(--color-base-300));
+  --chat-markdown-inline-code-bg: color-mix(in oklab, var(--color-base-300) 74%, var(--color-base-100));
+  --chat-markdown-inline-code-border: color-mix(in oklab, var(--color-base-content) 10%, var(--color-base-300));
+  --chat-markdown-pre-bg: color-mix(in oklab, var(--color-base-300) 70%, var(--color-base-100));
+  --chat-markdown-pre-border: color-mix(in oklab, var(--color-base-content) 10%, var(--color-base-300));
+  --chat-markdown-hr: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-300));
+  --chat-markdown-table-border: color-mix(in oklab, var(--color-base-content) 10%, var(--color-base-300));
+  --chat-markdown-table-head-bg: color-mix(in oklab, var(--color-base-300) 78%, var(--color-base-100));
+}
+
+[data-theme=dark] {
+  --chat-metric-tokens-fg: #a7f3d0;
+  --chat-metric-tokens-bg: rgb(16 185 129 / 0.12);
+  --chat-metric-tokens-border: rgb(16 185 129 / 0.22);
+  --chat-metric-cost-fg: #bae6fd;
+  --chat-metric-cost-bg: rgb(14 165 233 / 0.12);
+  --chat-metric-cost-border: rgb(14 165 233 / 0.22);
+  --chat-metric-reasoning-fg: #fde68a;
+  --chat-metric-reasoning-bg: rgb(245 158 11 / 0.12);
+  --chat-metric-reasoning-border: rgb(245 158 11 / 0.22);
+  --chat-metric-cached-fg: #a5f3fc;
+  --chat-metric-cached-bg: rgb(6 182 212 / 0.12);
+  --chat-metric-cached-border: rgb(6 182 212 / 0.22);
+  --chat-reasoning-fg: #fcd34d;
+  --chat-reasoning-label-fg: rgb(252 211 77 / 0.85);
+  --chat-reasoning-bg: rgb(251 191 36 / 0.08);
+  --chat-reasoning-border: rgb(251 191 36 / 0.18);
+  --chat-reasoning-cursor: rgb(252 211 77 / 0.72);
+  --chat-markdown-fg: #f1f1f1;
+  --chat-markdown-link: #93c5fd;
+  --chat-markdown-quote: #d4d4d8;
+  --chat-markdown-quote-border: rgb(63 63 70 / 1);
+  --chat-markdown-inline-code-bg: rgb(39 39 42 / 1);
+  --chat-markdown-inline-code-border: rgb(63 63 70 / 1);
+  --chat-markdown-pre-bg: rgb(9 9 11 / 0.9);
+  --chat-markdown-pre-border: rgb(63 63 70 / 1);
+  --chat-markdown-hr: rgb(63 63 70 / 1);
+  --chat-markdown-table-border: rgb(63 63 70 / 1);
+  --chat-markdown-table-head-bg: rgb(39 39 42 / 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --chat-metric-tokens-fg: #a7f3d0;
+    --chat-metric-tokens-bg: rgb(16 185 129 / 0.12);
+    --chat-metric-tokens-border: rgb(16 185 129 / 0.22);
+    --chat-metric-cost-fg: #bae6fd;
+    --chat-metric-cost-bg: rgb(14 165 233 / 0.12);
+    --chat-metric-cost-border: rgb(14 165 233 / 0.22);
+    --chat-metric-reasoning-fg: #fde68a;
+    --chat-metric-reasoning-bg: rgb(245 158 11 / 0.12);
+    --chat-metric-reasoning-border: rgb(245 158 11 / 0.22);
+    --chat-metric-cached-fg: #a5f3fc;
+    --chat-metric-cached-bg: rgb(6 182 212 / 0.12);
+    --chat-metric-cached-border: rgb(6 182 212 / 0.22);
+    --chat-reasoning-fg: #fcd34d;
+    --chat-reasoning-label-fg: rgb(252 211 77 / 0.85);
+    --chat-reasoning-bg: rgb(251 191 36 / 0.08);
+    --chat-reasoning-border: rgb(251 191 36 / 0.18);
+    --chat-reasoning-cursor: rgb(252 211 77 / 0.72);
+    --chat-markdown-fg: #f1f1f1;
+    --chat-markdown-link: #93c5fd;
+    --chat-markdown-quote: #d4d4d8;
+    --chat-markdown-quote-border: rgb(63 63 70 / 1);
+    --chat-markdown-inline-code-bg: rgb(39 39 42 / 1);
+    --chat-markdown-inline-code-border: rgb(63 63 70 / 1);
+    --chat-markdown-pre-bg: rgb(9 9 11 / 0.9);
+    --chat-markdown-pre-border: rgb(63 63 70 / 1);
+    --chat-markdown-hr: rgb(63 63 70 / 1);
+    --chat-markdown-table-border: rgb(63 63 70 / 1);
+    --chat-markdown-table-head-bg: rgb(39 39 42 / 1);
+  }
 }
 
 .ui-surface {
@@ -343,9 +435,67 @@
   color: color-mix(in oklab, var(--color-primary) 68%, var(--color-base-content));
 }
 
+.chat-metric-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-weight: 600;
+  color: var(--chat-metric-fg);
+  background: var(--chat-metric-bg);
+  border-color: var(--chat-metric-border);
+}
+
+.chat-metric-badge--tokens {
+  --chat-metric-fg: var(--chat-metric-tokens-fg);
+  --chat-metric-bg: var(--chat-metric-tokens-bg);
+  --chat-metric-border: var(--chat-metric-tokens-border);
+}
+
+.chat-metric-badge--cost {
+  --chat-metric-fg: var(--chat-metric-cost-fg);
+  --chat-metric-bg: var(--chat-metric-cost-bg);
+  --chat-metric-border: var(--chat-metric-cost-border);
+}
+
+.chat-metric-badge--reasoning {
+  --chat-metric-fg: var(--chat-metric-reasoning-fg);
+  --chat-metric-bg: var(--chat-metric-reasoning-bg);
+  --chat-metric-border: var(--chat-metric-reasoning-border);
+}
+
+.chat-metric-badge--cached {
+  --chat-metric-fg: var(--chat-metric-cached-fg);
+  --chat-metric-bg: var(--chat-metric-cached-bg);
+  --chat-metric-border: var(--chat-metric-cached-border);
+}
+
+.chat-metric-badge-value {
+  font-weight: 600;
+}
+
+.chat-metric-badge-value--tokens {
+  color: var(--chat-metric-tokens-fg);
+}
+
+.chat-reasoning {
+  color: var(--chat-reasoning-fg);
+  background: var(--chat-reasoning-bg);
+  border-color: var(--chat-reasoning-border);
+}
+
+.chat-reasoning-label {
+  color: var(--chat-reasoning-label-fg);
+}
+
+.chat-reasoning-cursor {
+  background: var(--chat-reasoning-cursor);
+}
+
 /* Chat markdown rendering */
 .chat-markdown {
-  color: inherit;
+  color: var(--chat-markdown-fg);
 }
 
 .chat-markdown > :first-child {
@@ -396,20 +546,20 @@
 }
 
 .chat-markdown :where(a) {
-  color: #93c5fd;
+  color: var(--chat-markdown-link);
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
 
 .chat-markdown :where(blockquote) {
-  border-left: 2px solid rgb(63 63 70 / 1);
-  color: #d4d4d8;
+  border-left: 2px solid var(--chat-markdown-quote-border);
+  color: var(--chat-markdown-quote);
   padding-left: 0.875rem;
 }
 
 .chat-markdown :where(code) {
-  background: rgb(39 39 42 / 1);
-  border: 1px solid rgb(63 63 70 / 1);
+  background: var(--chat-markdown-inline-code-bg);
+  border: 1px solid var(--chat-markdown-inline-code-border);
   border-radius: 0.4rem;
   font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
   font-size: 0.875em;
@@ -417,8 +567,8 @@
 }
 
 .chat-markdown :where(pre) {
-  background: rgb(9 9 11 / 0.9);
-  border: 1px solid rgb(63 63 70 / 1);
+  background: var(--chat-markdown-pre-bg);
+  border: 1px solid var(--chat-markdown-pre-border);
   border-radius: 1rem;
   overflow-x: auto;
   padding: 0.875rem 1rem;
@@ -436,7 +586,7 @@
 
 .chat-markdown :where(hr) {
   border: 0;
-  border-top: 1px solid rgb(63 63 70 / 1);
+  border-top: 1px solid var(--chat-markdown-hr);
 }
 
 .chat-markdown :where(table) {
@@ -447,14 +597,14 @@
 }
 
 .chat-markdown :where(th, td) {
-  border: 1px solid rgb(63 63 70 / 1);
+  border: 1px solid var(--chat-markdown-table-border);
   padding: 0.5rem 0.75rem;
   text-align: left;
   vertical-align: top;
 }
 
 .chat-markdown :where(th) {
-  background: rgb(39 39 42 / 1);
+  background: var(--chat-markdown-table-head-bg);
   font-weight: 600;
 }
 

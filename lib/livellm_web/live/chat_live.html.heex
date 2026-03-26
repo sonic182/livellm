@@ -23,7 +23,7 @@
               <div id="chat-total-tokens-wrapper" class="group relative">
                 <span
                   id="chat-total-tokens"
-                  class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-200"
+                  class="chat-metric-badge chat-metric-badge--tokens"
                 >
                   {token_label}
                 </span>
@@ -36,7 +36,9 @@
                     <span class="font-semibold uppercase tracking-[0.18em] text-base-content/60">
                       Token Breakdown
                     </span>
-                    <span class="text-emerald-300">{token_label}</span>
+                    <span class="chat-metric-badge-value chat-metric-badge-value--tokens">
+                      {token_label}
+                    </span>
                   </div>
 
                   <div class="space-y-1.5">
@@ -82,7 +84,7 @@
               <%= if cost_label = Usage.format_total_cost(@chat_metrics) do %>
                 <span
                   id="chat-total-cost"
-                  class="inline-flex items-center rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 font-medium text-sky-200"
+                  class="chat-metric-badge chat-metric-badge--cost"
                 >
                   {cost_label}
                 </span>
@@ -91,7 +93,7 @@
               <%= if reasoning_label = Usage.format_reasoning_tokens(@chat_metrics) do %>
                 <span
                   id="chat-reasoning-tokens"
-                  class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-200"
+                  class="chat-metric-badge chat-metric-badge--reasoning"
                 >
                   {reasoning_label}
                 </span>
@@ -100,7 +102,7 @@
               <%= if cached_label = Usage.format_cached_tokens(@chat_metrics) do %>
                 <span
                   id="chat-cached-tokens"
-                  class="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 font-medium text-cyan-200"
+                  class="chat-metric-badge chat-metric-badge--cached"
                 >
                   {cached_label}
                 </span>

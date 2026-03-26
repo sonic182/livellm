@@ -48,6 +48,11 @@ defmodule LivellmWeb.ChatLiveTest do
     {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
 
     assert has_element?(view, "#chat-metrics")
+    assert has_element?(view, "#chat-total-tokens.chat-metric-badge--tokens")
+    assert has_element?(view, "#chat-total-cost.chat-metric-badge--cost")
+    assert has_element?(view, "#chat-reasoning-tokens.chat-metric-badge--reasoning")
+    assert has_element?(view, "#chat-cached-tokens.chat-metric-badge--cached")
+    assert has_element?(view, "#messages-1-reasoning.chat-reasoning")
     assert render(element(view, "#chat-total-tokens")) =~ "18 tokens"
     popover = render(element(view, "#chat-tokens-popover"))
     assert popover =~ "Token Breakdown"
