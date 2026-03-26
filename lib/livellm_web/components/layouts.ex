@@ -81,7 +81,7 @@ defmodule LivellmWeb.Layouts do
 
   def chat(assigns) do
     ~H"""
-    <div class="h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 antialiased">
+    <div class="h-screen w-screen overflow-hidden bg-base-100 text-base-content antialiased">
       {render_slot(@inner_block)}
     </div>
     <.flash_group flash={@flash} />
