@@ -329,6 +329,7 @@
   <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoGrow">
     export default {
       mounted() {
+        this.el.focus()
         this.handleEvent("focus_input", () => this.el.focus())
         this.el.addEventListener("input", () => {
           this.el.style.height = "auto"
