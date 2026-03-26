@@ -15,7 +15,7 @@
 
         <div id="settings-sections" class="space-y-6">
           <%!-- General --%>
-          <div id="settings-general" class="rounded-xl border border-base-300 bg-base-200 p-6">
+          <.surface id="settings-general" class="p-6">
             <h2 class="text-sm font-semibold text-base-content mb-4">General</h2>
 
             <div class="flex items-center justify-between">
@@ -25,73 +25,20 @@
                   Choose your preferred color scheme.
                 </p>
               </div>
-              <div
-                id="theme-selector"
-                phx-hook=".ThemeSelector"
-                class="flex rounded-lg border border-base-300 bg-base-300 overflow-hidden"
-              >
-                <button
-                  id="theme-auto-btn"
-                  data-phx-theme="system"
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors"
-                >
-                  <.icon name="hero-computer-desktop-micro" class="size-3.5" /> Auto
-                </button>
-                <button
-                  id="theme-light-btn"
-                  data-phx-theme="light"
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-l border-base-300"
-                >
-                  <.icon name="hero-sun-micro" class="size-3.5" /> Light
-                </button>
-                <button
-                  id="theme-dark-btn"
-                  data-phx-theme="dark"
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-l border-base-300"
-                >
-                  <.icon name="hero-moon-micro" class="size-3.5" /> Dark
-                </button>
-              </div>
+              <.theme_selector id="theme-selector" />
             </div>
-          </div>
-          <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSelector">
-            export default {
-              mounted() {
-                this._update = () => {
-                  const current = localStorage.getItem("phx:theme") || "system";
-                  this.el.querySelectorAll("button[data-phx-theme]").forEach(btn => {
-                    const active = btn.dataset.phxTheme === current;
-                    btn.classList.toggle("bg-base-100", active);
-                    btn.classList.toggle("text-base-content", active);
-                    btn.classList.toggle("shadow-sm", active);
-                    btn.classList.toggle("text-base-content/50", !active);
-                  });
-                };
-                this.el.querySelectorAll("button[data-phx-theme]").forEach(btn => {
-                  btn.addEventListener("click", () => {
-                    btn.dispatchEvent(new Event("phx:set-theme", { bubbles: true }));
-                    setTimeout(this._update, 10);
-                  });
-                });
-                window.addEventListener("storage", this._update);
-                this._update();
-              },
-              destroyed() {
-                window.removeEventListener("storage", this._update);
-              }
-            }
-          </script>
+          </.surface>
 
           <%!-- Models placeholder --%>
-          <div id="settings-models" class="rounded-xl border border-base-300 bg-base-200 p-6">
+          <.surface id="settings-models" class="p-6" tone={:subtle}>
             <h2 class="text-sm font-semibold text-base-content mb-1">Models</h2>
             <p class="text-xs text-base-content/50">Model configuration will appear here.</p>
-          </div>
+          </.surface>
 
           <%!-- Connections — provider configs --%>
-          <div
+          <.surface
             id="settings-connections"
-            class="rounded-xl border border-base-300 bg-base-200 p-6 space-y-6"
+            class="space-y-6 p-6"
           >
             <div>
               <h2 class="text-sm font-semibold text-base-content mb-1">Connections</h2>
@@ -105,13 +52,13 @@
               <div
                 :for={{id, config} <- @streams.provider_configs}
                 id={id}
-                class="flex items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-300 px-4 py-3"
+                class="flex items-center justify-between gap-4 rounded-2xl border border-base-300/80 bg-base-100/80 px-4 py-3"
               >
                 <div class="flex items-center gap-3 min-w-0">
                   <%!-- Provider badge --%>
-                  <span class="shrink-0 rounded-md bg-violet-900/50 border border-violet-700/50 px-2 py-0.5 text-xs font-medium text-violet-300 uppercase tracking-wide">
+                  <.status_badge tone={:accent} class="shrink-0 uppercase tracking-wide">
                     {config.provider}
-                  </span>
+                  </.status_badge>
                   <div class="min-w-0">
                     <p class="text-sm font-medium text-base-content truncate">{config.label}</p>
                     <p class="text-xs text-base-content/50 truncate">
@@ -123,10 +70,9 @@
                 <div class="flex items-center gap-2 shrink-0">
                   <%!-- Enabled indicator --%>
                   <%= if config.enabled do %>
-                    <span class="flex items-center gap-1 text-xs text-emerald-400">
-                      <span class="size-1.5 rounded-full bg-emerald-400 inline-block"></span>
-                      Active
-                    </span>
+                    <.status_badge tone={:success}>
+                      <span class="size-1.5 rounded-full bg-current inline-block"></span> Active
+                    </.status_badge>
                   <% else %>
                     <button
                       phx-click="enable_config"
@@ -163,9 +109,8 @@
                 class="space-y-4"
               >
                 <div class="grid grid-cols-2 gap-4">
-                  <.input
+                  <.select_input
                     field={@form[:provider]}
-                    type="select"
                     label="Provider"
                     options={[
                       {"OpenAI (Chat Completions)", "openai"},
@@ -175,22 +120,20 @@
                       {"Google", "google"}
                     ]}
                   />
-                  <.input
+                  <.text_input
                     field={@form[:label]}
-                    type="text"
                     label="Label"
                     placeholder="e.g. My OpenAI"
                   />
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
-                  <.input
+                  <.text_input
                     field={@form[:default_model]}
-                    type="text"
                     label="Default Model (optional)"
                     placeholder="e.g. gpt-4.1-mini"
                   />
-                  <.input
+                  <.text_input
                     field={@form[:api_key]}
                     type="password"
                     label="API Key"
@@ -198,9 +141,8 @@
                   />
                 </div>
 
-                <.input
+                <.text_input
                   field={@form[:base_url]}
-                  type="text"
                   label="Base URL (optional)"
                   placeholder="https://api.openai.com/v1"
                 />
@@ -216,7 +158,7 @@
                 </div>
               </.form>
             </div>
-          </div>
+          </.surface>
         </div>
       </div>
     </main>

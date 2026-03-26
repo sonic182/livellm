@@ -25,17 +25,68 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/livellm"
 import topbar from "../vendor/topbar"
 
+const getThemeValue = () => localStorage.getItem("phx:theme") || "system"
+
+const syncThemePicker = root => {
+  root.querySelectorAll("[data-theme-option]").forEach(button => {
+    const active = button.dataset.phxTheme === getThemeValue()
+    button.dataset.active = active ? "true" : "false"
+    button.setAttribute("aria-pressed", active ? "true" : "false")
+  })
+}
+
+const attachThemePicker = root => {
+  if (root.dataset.themePickerInitialized === "true") return
+
+  root.querySelectorAll("[data-theme-option]").forEach(button => {
+    button.addEventListener("click", () => {
+      button.dispatchEvent(new Event("phx:set-theme", {bubbles: true}))
+      requestAnimationFrame(() => syncThemePicker(root))
+    })
+  })
+
+  root.dataset.themePickerInitialized = "true"
+  syncThemePicker(root)
+}
+
+const hooks = {
+  ...colocatedHooks,
+  ThemePicker: {
+    mounted() {
+      this.handleStorage = event => {
+        if (event.key === "phx:theme") syncThemePicker(this.el)
+      }
+
+      attachThemePicker(this.el)
+      window.addEventListener("storage", this.handleStorage)
+    },
+    updated() {
+      attachThemePicker(this.el)
+      syncThemePicker(this.el)
+    },
+    destroyed() {
+      window.removeEventListener("storage", this.handleStorage)
+    },
+  },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks,
 })
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+window.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("[data-theme-picker]").forEach(attachThemePicker)
+})
+window.addEventListener("phx:set-theme", () => {
+  document.querySelectorAll("[data-theme-picker]").forEach(syncThemePicker)
+})
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()
@@ -80,4 +131,3 @@ if (process.env.NODE_ENV === "development") {
     window.liveReloader = reloader
   })
 }
-

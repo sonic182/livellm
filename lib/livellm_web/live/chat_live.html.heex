@@ -123,58 +123,50 @@
             phx-change="update_chat_settings"
             phx-hook=".ChatSettings"
             data-chat-id={@current_chat_id}
-            class="flex items-center gap-2 shrink-0"
+            class="flex items-start gap-2 shrink-0"
           >
-            <select
+            <.select_input
               id="provider-select"
               name="provider_id"
-              class="bg-base-200 border border-base-300 rounded-lg px-2 py-1 text-xs text-base-content focus:outline-none focus:border-base-content/30 transition-colors cursor-pointer"
-            >
-              <option value="">Select provider...</option>
-              <%= for p <- @provider_configs do %>
-                <option value={p.id} selected={@selected_provider_id == p.id}>
-                  {p.label} ({p.provider})
-                </option>
-              <% end %>
-            </select>
+              value={@selected_provider_id}
+              prompt="Select provider..."
+              options={Enum.map(@provider_configs, &{"#{&1.label} (#{&1.provider})", &1.id})}
+              density={:compact}
+              class="w-44"
+              input_class="cursor-pointer"
+            />
 
-            <input
+            <.text_input
               id="model-input"
-              type="text"
               name="model"
               value={@selected_model}
               placeholder="Model..."
               phx-debounce="300"
               phx-hook=".AutosizeInput"
-              class="bg-base-200 border border-base-300 rounded-lg px-2 py-1 text-xs text-base-content placeholder-base-content/40 focus:outline-none focus:border-base-content/30 transition-colors min-w-16"
+              density={:compact}
+              class="w-32"
+              input_class="min-w-16"
             />
 
-            <select
+            <.select_input
               id="reasoning-effort-select"
               name="reasoning_effort"
-              class="bg-base-200 border border-base-300 rounded-lg px-2 py-1 text-xs text-base-content focus:outline-none focus:border-base-content/30 transition-colors cursor-pointer"
-            >
-              <option value="">No reasoning</option>
-              <%= for effort <- ~w(minimal low medium high xhigh) do %>
-                <option value={effort} selected={@selected_reasoning_effort == effort}>
-                  {effort}
-                </option>
-              <% end %>
-            </select>
+              value={@selected_reasoning_effort}
+              prompt="No reasoning"
+              options={Enum.map(~w(minimal low medium high xhigh), &{&1, &1})}
+              density={:compact}
+              class="w-32"
+              input_class="cursor-pointer"
+            />
 
-            <label
-              id="streaming-label"
-              class="flex items-center gap-1.5 text-xs text-base-content/60 cursor-pointer select-none"
-            >
-              <input
-                id="streaming-toggle"
-                type="checkbox"
-                name="streaming"
-                value="true"
-                checked={@stream_mode}
-                class="accent-violet-500 cursor-pointer"
-              /> Stream
-            </label>
+            <.checkbox_input
+              id="streaming-toggle"
+              name="streaming"
+              checked={@stream_mode}
+              label="Stream"
+              density={:compact}
+              class="pt-1"
+            />
           </form>
         <% end %>
       </header>

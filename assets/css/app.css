@@ -102,6 +102,247 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Application UI primitives */
+:root {
+  --ui-surface-bg: var(--color-base-200);
+  --ui-surface-bg-subtle: color-mix(in oklab, var(--color-base-200) 70%, var(--color-base-100));
+  --ui-surface-border: color-mix(in oklab, var(--color-base-300) 85%, transparent);
+  --ui-field-bg: var(--color-base-100);
+  --ui-field-border: color-mix(in oklab, var(--color-base-300) 82%, transparent);
+  --ui-field-border-hover: color-mix(in oklab, var(--color-base-content) 22%, var(--color-base-300));
+  --ui-field-border-focus: color-mix(in oklab, var(--color-primary) 60%, white 8%);
+  --ui-field-text: var(--color-base-content);
+  --ui-field-placeholder: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+  --ui-field-error: var(--color-error);
+  --ui-muted-text: color-mix(in oklab, var(--color-base-content) 58%, transparent);
+  --ui-segment-bg: color-mix(in oklab, var(--color-base-300) 88%, transparent);
+  --ui-segment-active-bg: var(--color-base-100);
+  --ui-segment-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+}
+
+.ui-surface {
+  border: 1px solid var(--ui-surface-border);
+  border-radius: 1rem;
+  background: var(--ui-surface-bg);
+}
+
+.ui-surface-default {
+  box-shadow: 0 12px 28px rgb(15 23 42 / 0.04);
+}
+
+.ui-surface-subtle {
+  background: var(--ui-surface-bg-subtle);
+}
+
+.ui-field-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-field-shell-default {
+  gap: 0.55rem;
+}
+
+.ui-field-shell-compact {
+  gap: 0.4rem;
+}
+
+.ui-label {
+  color: var(--ui-field-text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ui-hint {
+  color: var(--ui-muted-text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.ui-error {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ui-field-error);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.ui-field {
+  width: 100%;
+  min-height: 2.9rem;
+  border: 1px solid var(--ui-field-border);
+  border-radius: 0.9rem;
+  background: var(--ui-field-bg);
+  color: var(--ui-field-text);
+  padding: 0.72rem 0.9rem;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.ui-field:hover {
+  border-color: var(--ui-field-border-hover);
+}
+
+.ui-field:focus {
+  outline: none;
+  border-color: var(--ui-field-border-focus);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary) 18%, transparent);
+}
+
+.ui-field::placeholder {
+  color: var(--ui-field-placeholder);
+}
+
+.ui-field:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.ui-field-compact {
+  min-height: 2.35rem;
+  border-radius: 0.8rem;
+  padding: 0.48rem 0.72rem;
+  font-size: 0.75rem;
+}
+
+.ui-field-error {
+  border-color: color-mix(in oklab, var(--color-error) 72%, var(--ui-field-border));
+}
+
+.ui-textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.ui-checkbox-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.ui-checkbox-label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.ui-checkbox {
+  margin-top: 0.2rem;
+  height: 1rem;
+  width: 1rem;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+}
+
+.ui-checkbox-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ui-segmented-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--ui-surface-border);
+  border-radius: 999px;
+  background: var(--ui-segment-bg);
+  padding: 0.25rem;
+}
+
+.ui-segmented-default {
+  min-height: 2.6rem;
+}
+
+.ui-segmented-compact {
+  min-height: 2.2rem;
+}
+
+.ui-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-muted-text);
+  cursor: pointer;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.ui-segmented-default .ui-segment {
+  min-height: 2rem;
+  padding: 0 0.95rem;
+  font-size: 0.8rem;
+}
+
+.ui-segmented-compact .ui-segment {
+  min-height: 1.7rem;
+  padding: 0 0.72rem;
+  font-size: 0.75rem;
+}
+
+.ui-segment:hover {
+  color: var(--ui-field-text);
+}
+
+.ui-segment:focus {
+  outline: none;
+}
+
+.ui-segment[data-active="true"] {
+  background: var(--ui-segment-active-bg);
+  color: var(--ui-field-text);
+  box-shadow: var(--ui-segment-shadow);
+}
+
+.ui-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.ui-status-badge-neutral {
+  border-color: color-mix(in oklab, var(--color-base-300) 88%, transparent);
+  background: color-mix(in oklab, var(--color-base-300) 72%, transparent);
+  color: var(--ui-field-text);
+}
+
+.ui-status-badge-success {
+  border-color: color-mix(in oklab, var(--color-success) 36%, transparent);
+  background: color-mix(in oklab, var(--color-success) 16%, transparent);
+  color: color-mix(in oklab, var(--color-success) 65%, var(--color-base-content));
+}
+
+.ui-status-badge-warning {
+  border-color: color-mix(in oklab, var(--color-warning) 36%, transparent);
+  background: color-mix(in oklab, var(--color-warning) 16%, transparent);
+  color: color-mix(in oklab, var(--color-warning) 68%, var(--color-base-content));
+}
+
+.ui-status-badge-accent {
+  border-color: color-mix(in oklab, var(--color-primary) 34%, transparent);
+  background: color-mix(in oklab, var(--color-primary) 16%, transparent);
+  color: color-mix(in oklab, var(--color-primary) 68%, var(--color-base-content));
+}
+
 /* Chat markdown rendering */
 .chat-markdown {
   color: inherit;
