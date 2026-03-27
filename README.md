@@ -2,10 +2,7 @@
 
 Livellm is a minimal Phoenix LiveView chat app built as a working reference for integrating [`llm_composer`](https://github.com/doofinder/llm_composer) — an Elixir library that normalizes LLM provider calls. It shows how to wire multi-provider streaming, reasoning output, token cost tracking, and stateful conversation into a real product, using standard Elixir/OTP and Phoenix LiveView patterns throughout.
 
-References:
-
-- Upstream library: https://github.com/doofinder/llm_composer
-- Local reference copy: [`./llm_composer`](./llm_composer)
+Upstream library: https://github.com/doofinder/llm_composer
 
 ## Screenshots
 
@@ -82,6 +79,27 @@ Then open http://localhost:4000
 
 `mix setup` installs dependencies, creates the local SQLite database, runs migrations, seeds the database, and builds assets.
 
+## Getting Started
+
+All data — provider credentials and chat history — is stored in a local SQLite database (`livellm_dev.db` in the project root). Nothing is sent to any external service other than the LLM provider calls you configure.
+
+**Step 1 — configure a provider**
+
+Before you can chat you need at least one active provider. Open **Settings**, add a provider with:
+
+- Provider type (e.g. `openai_responses`, `openrouter`, `ollama`)
+- A label for your own reference
+- API key, if required by the provider
+- Optional default model and base URL override
+
+Mark the provider as active.
+
+**Step 2 — start chatting**
+
+Click **New Chat**, pick your provider and model from the chat header, and send a message.
+
+---
+
 ## How To Use Livellm
 
 1. Open `Settings`.
@@ -119,4 +137,3 @@ Use `mix precommit` before finalizing changes. It compiles with warnings as erro
 For full `llm_composer` documentation, provider coverage, and advanced usage patterns:
 
 - https://github.com/doofinder/llm_composer
-- [`./llm_composer/README.md`](./llm_composer/README.md)
