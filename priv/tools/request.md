@@ -39,13 +39,9 @@ schema:
           - value
         additionalProperties: false
     body:
-      description: Optional request body. May be a string, JSON value, or null.
+      description: Optional request body. Pass raw text or a JSON-encoded string, or null.
       type:
         - string
-        - object
-        - array
-        - number
-        - boolean
         - "null"
   required:
     - url
