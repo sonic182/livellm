@@ -8,6 +8,7 @@ defmodule Livellm.Chats.Message do
 
   alias Livellm.Chats.Chat
   alias Livellm.Chats.Message.ReasoningStep
+  alias Livellm.Chats.Message.UsageBreakdownEntry
 
   @type t :: %__MODULE__{
           id: integer() | nil,
@@ -30,6 +31,7 @@ defmodule Livellm.Chats.Message do
           provider_name: String.t() | nil,
           provider_model: String.t() | nil,
           provider_response_id: String.t() | nil,
+          usage_breakdown: list(UsageBreakdownEntry.t()),
           tool_calls: list(map()) | nil,
           chat_id: integer() | nil,
           chat: Chat.t() | nil,
@@ -57,6 +59,7 @@ defmodule Livellm.Chats.Message do
     field :provider_name, :string
     field :provider_model, :string
     field :provider_response_id, :string
+    embeds_many :usage_breakdown, UsageBreakdownEntry, on_replace: :delete
     field :tool_calls, {:array, :map}
     belongs_to :chat, Chat
 
@@ -90,6 +93,7 @@ defmodule Livellm.Chats.Message do
   def changeset(message, attrs) do
     message
     |> cast(attrs, @required ++ @optional)
+    |> cast_embed(:usage_breakdown)
     |> validate_required(@required)
     |> validate_inclusion(:role, ["user", "assistant", "system", "tool"])
     |> assoc_constraint(:chat)

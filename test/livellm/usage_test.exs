@@ -163,4 +163,100 @@ defmodule Livellm.UsageTest do
     assert attrs.provider_model == "gpt-5.4-mini-2026-03-17"
     assert attrs.provider_response_id == "resp_999"
   end
+
+  test "aggregate_usage_breakdown sums usage across multiple iterations" do
+    entries = [
+      %{
+        iteration: 1,
+        result_type: "tool_calls",
+        input_tokens: 40,
+        output_tokens: 12,
+        total_tokens: 52,
+        cached_tokens: 5,
+        reasoning_tokens: 9,
+        input_cost: Decimal.new("0.000010"),
+        output_cost: Decimal.new("0.000020"),
+        total_cost: Decimal.new("0.000030"),
+        cost_currency: "USD",
+        provider_name: "open_ai",
+        provider_model: "gpt-4.1-mini",
+        provider_response_id: "resp_tool"
+      },
+      %{
+        iteration: 2,
+        result_type: "final",
+        input_tokens: 20,
+        output_tokens: 7,
+        total_tokens: 27,
+        cached_tokens: 2,
+        reasoning_tokens: 4,
+        input_cost: Decimal.new("0.000005"),
+        output_cost: Decimal.new("0.000010"),
+        total_cost: Decimal.new("0.000015"),
+        cost_currency: "USD",
+        provider_name: "open_ai",
+        provider_model: "gpt-4.1-mini",
+        provider_response_id: "resp_final"
+      }
+    ]
+
+    attrs = Usage.aggregate_usage_breakdown(entries)
+
+    assert attrs.input_tokens == 60
+    assert attrs.output_tokens == 19
+    assert attrs.total_tokens == 79
+    assert attrs.cached_tokens == 7
+    assert attrs.reasoning_tokens == 13
+    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000015"))
+    assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000030"))
+    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000045"))
+    assert attrs.cost_currency == "USD"
+    assert attrs.provider_response_id == "resp_final"
+  end
+
+  test "aggregate_usage_breakdown preserves partial iterations" do
+    attrs =
+      Usage.aggregate_usage_breakdown([
+        %{
+          iteration: 1,
+          result_type: "tool_calls",
+          input_tokens: nil,
+          output_tokens: nil,
+          total_tokens: nil,
+          cached_tokens: nil,
+          reasoning_tokens: nil,
+          input_cost: nil,
+          output_cost: nil,
+          total_cost: nil,
+          cost_currency: nil,
+          provider_name: "open_ai",
+          provider_model: "gpt-4.1-mini",
+          provider_response_id: "resp_tool"
+        },
+        %{
+          iteration: 2,
+          result_type: "final",
+          input_tokens: 10,
+          output_tokens: 4,
+          total_tokens: 14,
+          cached_tokens: 1,
+          reasoning_tokens: 2,
+          input_cost: nil,
+          output_cost: nil,
+          total_cost: nil,
+          cost_currency: nil,
+          provider_name: "open_ai",
+          provider_model: "gpt-4.1-mini",
+          provider_response_id: "resp_final"
+        }
+      ])
+
+    assert attrs.input_tokens == 10
+    assert attrs.output_tokens == 4
+    assert attrs.total_tokens == 14
+    assert attrs.cached_tokens == 1
+    assert attrs.reasoning_tokens == 2
+    assert attrs.total_cost == nil
+    assert attrs.provider_response_id == "resp_final"
+  end
 end

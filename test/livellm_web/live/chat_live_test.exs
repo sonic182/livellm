@@ -177,6 +177,9 @@ defmodule LivellmWeb.ChatLiveTest do
 
     _ = :sys.get_state(view.pid)
 
+    chat = Chats.list_chats() |> List.first()
+    assistant_msg = Chats.latest_assistant_message(chat)
+
     assert has_element?(view, "#chat-total-tokens")
     assert render(element(view, "#chat-total-tokens")) =~ "48 tokens"
     popover = render(element(view, "#chat-tokens-popover"))
@@ -188,6 +191,9 @@ defmodule LivellmWeb.ChatLiveTest do
     assert render(element(view, "#chat-reasoning-tokens")) =~ "9 reasoning"
     assert render(element(view, "#chat-cached-tokens")) =~ "12 cached"
     assert has_element?(view, "#messages-2-reasoning")
+    assert length(assistant_msg.usage_breakdown) == 1
+    assert Enum.at(assistant_msg.usage_breakdown, 0).iteration == 1
+    assert Enum.at(assistant_msg.usage_breakdown, 0).result_type == "final"
   end
 
   test "streaming responses persist normalized chunk metadata from llm_composer", %{conn: conn} do
@@ -277,6 +283,9 @@ defmodule LivellmWeb.ChatLiveTest do
     assert assistant_msg.provider_model == "gpt-5.4-mini"
     assert assistant_msg.provider_response_id == "resp_stream_123"
     assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000024500000"))
+    assert length(assistant_msg.usage_breakdown) == 1
+    assert Enum.at(assistant_msg.usage_breakdown, 0).iteration == 1
+    assert Enum.at(assistant_msg.usage_breakdown, 0).result_type == "final"
   end
 
   test "non-streaming tool loops persist reasoning before and after tool execution", %{
@@ -297,14 +306,48 @@ defmodule LivellmWeb.ChatLiveTest do
               reasoning: "Second reasoning",
               reasoning_details: [%{"text" => "Second reasoning"}]
             },
-            raw: %{"id" => "resp_final"}
+            input_tokens: 20,
+            output_tokens: 7,
+            cached_tokens: 2,
+            cost_info:
+              LlmComposer.CostInfo.new(
+                :open_ai,
+                "gpt-4.1-mini",
+                20,
+                7,
+                cached_tokens: 2,
+                input_price_per_million: Decimal.new("1.0"),
+                output_price_per_million: Decimal.new("2.0"),
+                currency: "USD"
+              ),
+            raw: %{
+              "id" => "resp_final",
+              "usage" => %{"completion_tokens_details" => %{"reasoning_tokens" => 4}}
+            }
           })
         else
           {:ok,
            %LlmComposer.LlmResponse{
              provider: :open_ai,
              status: :ok,
-             raw: %{"id" => "resp_tool"},
+             input_tokens: 40,
+             output_tokens: 12,
+             cached_tokens: 5,
+             cost_info:
+               LlmComposer.CostInfo.new(
+                 :open_ai,
+                 "gpt-4.1-mini",
+                 40,
+                 12,
+                 cached_tokens: 5,
+                 input_price_per_million: Decimal.new("1.0"),
+                 output_price_per_million: Decimal.new("2.0"),
+                 currency: "USD"
+               ),
+             raw: %{
+               "id" => "resp_tool",
+               "usage" => %{"completion_tokens_details" => %{"reasoning_tokens" => 9}}
+             },
              main_response: %LlmComposer.Message{
                type: :assistant,
                content: nil,
@@ -354,7 +397,17 @@ defmodule LivellmWeb.ChatLiveTest do
     chat = Chats.list_chats() |> List.first()
     assistant_msg = Chats.latest_assistant_message(chat)
 
+    assert assistant_msg.input_tokens == 60
+    assert assistant_msg.output_tokens == 19
+    assert assistant_msg.total_tokens == 79
+    assert assistant_msg.cached_tokens == 7
+    assert assistant_msg.reasoning_tokens == 13
+    assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000098"))
     assert assistant_msg.reasoning == "Second reasoning"
+    assert length(assistant_msg.usage_breakdown) == 2
+
+    first_usage = Enum.at(assistant_msg.usage_breakdown, 0)
+    second_usage = Enum.at(assistant_msg.usage_breakdown, 1)
 
     assert assistant_msg.reasoning_details == [
              %{"text" => "First reasoning"},
@@ -366,6 +419,18 @@ defmodule LivellmWeb.ChatLiveTest do
              %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
              %{"type" => "reasoning", "content" => "Second reasoning"}
            ]
+
+    assert first_usage.iteration == 1
+    assert first_usage.result_type == "tool_calls"
+    assert first_usage.input_tokens == 40
+    assert first_usage.output_tokens == 12
+    assert first_usage.reasoning_tokens == 9
+
+    assert second_usage.iteration == 2
+    assert second_usage.result_type == "final"
+    assert second_usage.input_tokens == 20
+    assert second_usage.output_tokens == 7
+    assert second_usage.reasoning_tokens == 4
   end
 
   test "streaming tool loops persist reasoning before and after tool execution", %{conn: conn} do

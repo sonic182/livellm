@@ -489,12 +489,20 @@ defmodule LivellmWeb.ChatLive do
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
         current_reasoning_details = llm_response.main_response.reasoning_details || []
 
+        current_usage_entry =
+          Usage.usage_breakdown_entry_from_response(
+            llm_response,
+            next_iteration(trace_acc),
+            "tool_calls"
+          )
+
         next_trace_acc =
           accumulate_trace(
             trace_acc,
             llm_response.main_response.reasoning,
             current_reasoning_details,
-            new_tool_calls
+            new_tool_calls,
+            current_usage_entry
           )
 
         run_llm_loop(
@@ -560,8 +568,21 @@ defmodule LivellmWeb.ChatLive do
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
 
+        current_usage_entry =
+          Usage.usage_breakdown_entry_from_chunk(
+            final.final_chunk,
+            next_iteration(trace_acc),
+            "tool_calls"
+          )
+
         next_trace_acc =
-          accumulate_trace(trace_acc, final.reasoning, final.reasoning_details, new_tool_calls)
+          accumulate_trace(
+            trace_acc,
+            final.reasoning,
+            final.reasoning_details,
+            new_tool_calls,
+            current_usage_entry
+          )
 
         run_llm_loop(
           req,
@@ -618,7 +639,18 @@ defmodule LivellmWeb.ChatLive do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
-    final_trace_acc = accumulate_trace(trace_acc, reasoning, reasoning_details, [])
+    final_trace_acc =
+      accumulate_trace(
+        trace_acc,
+        reasoning,
+        reasoning_details,
+        [],
+        Usage.usage_breakdown_entry_from_response(
+          llm_response,
+          next_iteration(trace_acc),
+          "final"
+        )
+      )
 
     attrs =
       %{
@@ -628,9 +660,10 @@ defmodule LivellmWeb.ChatLive do
         reasoning_steps: final_trace_acc.reasoning_steps,
         reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
         raw_response: llm_response.raw,
+        usage_breakdown: blank_list_to_nil(final_trace_acc.usage_breakdown),
         tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
       }
-      |> Map.merge(Usage.cost_tracking_attrs(llm_response))
+      |> Map.merge(Usage.aggregate_usage_breakdown(final_trace_acc.usage_breakdown))
 
     case Chats.create_message(chat, attrs) do
       {:ok, assistant_msg} ->
@@ -759,7 +792,18 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp build_stream_message_attrs(final, trace_acc) do
-    final_trace_acc = accumulate_trace(trace_acc, final.reasoning, final.reasoning_details, [])
+    final_trace_acc =
+      accumulate_trace(
+        trace_acc,
+        final.reasoning,
+        final.reasoning_details,
+        [],
+        Usage.usage_breakdown_entry_from_chunk(
+          final.final_chunk,
+          next_iteration(trace_acc),
+          "final"
+        )
+      )
 
     %{
       role: "assistant",
@@ -768,9 +812,10 @@ defmodule LivellmWeb.ChatLive do
       reasoning_steps: final_trace_acc.reasoning_steps,
       reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
       raw_response: final.final_chunk && final.final_chunk.raw,
+      usage_breakdown: blank_list_to_nil(final_trace_acc.usage_breakdown),
       tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
     }
-    |> Map.merge(Usage.stream_chunk_attrs(final.final_chunk))
+    |> Map.merge(Usage.aggregate_usage_breakdown(final_trace_acc.usage_breakdown))
   end
 
   defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: deltas})
@@ -857,20 +902,24 @@ defmodule LivellmWeb.ChatLive do
     %{
       tool_calls_history: [],
       reasoning_steps: [],
-      reasoning_details_history: []
+      reasoning_details_history: [],
+      usage_breakdown: []
     }
   end
 
-  defp accumulate_trace(trace_acc, reasoning, reasoning_details, tool_calls) do
+  defp accumulate_trace(trace_acc, reasoning, reasoning_details, tool_calls, usage_entry) do
     %{
       tool_calls_history: trace_acc.tool_calls_history ++ tool_calls,
       reasoning_steps:
         trace_acc.reasoning_steps ++
           build_reasoning_steps(reasoning, reasoning_details, tool_calls),
       reasoning_details_history:
-        trace_acc.reasoning_details_history ++ List.wrap(reasoning_details)
+        trace_acc.reasoning_details_history ++ List.wrap(reasoning_details),
+      usage_breakdown: trace_acc.usage_breakdown ++ List.wrap(usage_entry)
     }
   end
+
+  defp next_iteration(trace_acc), do: length(trace_acc.usage_breakdown) + 1
 
   defp reasoning_content(reasoning, _reasoning_details) when reasoning not in [nil, ""],
     do: reasoning

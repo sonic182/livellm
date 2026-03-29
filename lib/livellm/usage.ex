@@ -4,6 +4,7 @@ defmodule Livellm.Usage do
   """
 
   alias Decimal
+  alias Livellm.Chats.Message.UsageBreakdownEntry
   alias LlmComposer.CostInfo
 
   @type chat_metrics :: %{
@@ -18,6 +19,8 @@ defmodule Livellm.Usage do
           currency: String.t() | nil,
           cost_tracked?: boolean()
         }
+
+  @type usage_breakdown_entry :: UsageBreakdownEntry.t()
 
   @spec empty_chat_metrics() :: chat_metrics()
   def empty_chat_metrics do
@@ -120,6 +123,37 @@ defmodule Livellm.Usage do
     }
   end
 
+  @spec usage_breakdown_entry_from_response(
+          LlmComposer.LlmResponse.t(),
+          pos_integer(),
+          String.t()
+        ) ::
+          usage_breakdown_entry()
+  def usage_breakdown_entry_from_response(llm_response, iteration, result_type) do
+    llm_response
+    |> cost_tracking_attrs()
+    |> Map.put(:iteration, iteration)
+    |> Map.put(:result_type, result_type)
+  end
+
+  @spec usage_breakdown_entry_from_chunk(
+          LlmComposer.StreamChunk.t() | nil,
+          pos_integer(),
+          String.t()
+        ) ::
+          usage_breakdown_entry()
+  def usage_breakdown_entry_from_chunk(chunk, iteration, result_type) do
+    chunk
+    |> stream_chunk_attrs()
+    |> Map.put(:iteration, iteration)
+    |> Map.put(:result_type, result_type)
+  end
+
+  @spec aggregate_usage_breakdown([usage_breakdown_entry()]) :: map()
+  def aggregate_usage_breakdown(entries) when is_list(entries) do
+    Enum.reduce(entries, empty_usage_totals(), &merge_usage_entry/2)
+  end
+
   @spec format_total_tokens(chat_metrics()) :: String.t() | nil
   def format_total_tokens(%{total_tokens: total_tokens}) when total_tokens > 0 do
     "#{total_tokens} tokens"
@@ -181,6 +215,40 @@ defmodule Livellm.Usage do
     }
   end
 
+  defp empty_usage_totals do
+    %{
+      input_tokens: nil,
+      output_tokens: nil,
+      total_tokens: nil,
+      cached_tokens: nil,
+      reasoning_tokens: nil,
+      input_cost: nil,
+      output_cost: nil,
+      total_cost: nil,
+      cost_currency: nil,
+      provider_name: nil,
+      provider_model: nil,
+      provider_response_id: nil
+    }
+  end
+
+  defp merge_usage_entry(entry, totals) do
+    %{
+      input_tokens: sum_optional_int(totals.input_tokens, entry.input_tokens),
+      output_tokens: sum_optional_int(totals.output_tokens, entry.output_tokens),
+      total_tokens: sum_optional_int(totals.total_tokens, entry.total_tokens),
+      cached_tokens: sum_optional_int(totals.cached_tokens, entry.cached_tokens),
+      reasoning_tokens: sum_optional_int(totals.reasoning_tokens, entry.reasoning_tokens),
+      input_cost: add_cost(totals.input_cost, entry.input_cost),
+      output_cost: add_cost(totals.output_cost, entry.output_cost),
+      total_cost: add_cost(totals.total_cost, entry.total_cost),
+      cost_currency: entry.cost_currency || totals.cost_currency,
+      provider_name: entry.provider_name || totals.provider_name,
+      provider_model: entry.provider_model || totals.provider_model,
+      provider_response_id: entry.provider_response_id || totals.provider_response_id
+    }
+  end
+
   defp format_cost(%Decimal{} = amount, currency) do
     amount =
       amount
@@ -197,6 +265,11 @@ defmodule Livellm.Usage do
 
   defp token_value(nil, _field, fallback), do: fallback
   defp token_value(cost_info, field, _fallback), do: Map.get(cost_info, field)
+
+  defp sum_optional_int(nil, nil), do: nil
+  defp sum_optional_int(left, nil), do: left
+  defp sum_optional_int(nil, right), do: right
+  defp sum_optional_int(left, right), do: left + right
 
   defp add_cost(nil, nil), do: nil
   defp add_cost(%Decimal{} = left, nil), do: left
