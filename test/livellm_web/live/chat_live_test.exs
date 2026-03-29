@@ -726,10 +726,12 @@ defmodule LivellmWeb.ChatLiveTest do
            ]
 
     assert Keyword.get(second_opts, :stream) == true
+    assert_receive {_, {:push_event, "focus_input", %{}}}, 1_000
+
+    chat = Chats.get_chat!(chat_id)
 
     _ = :sys.get_state(view.pid)
 
-    chat = Chats.get_chat!(chat_id)
     assistant_msg = Chats.latest_assistant_message(chat)
 
     assert assistant_msg.content == "Final answer"
