@@ -39,6 +39,13 @@ defmodule Livellm.Memories do
     |> Repo.insert()
   end
 
+  @doc "Updates a memory."
+  def update_memory(%Memory{} = memory, attrs) do
+    memory
+    |> Memory.changeset(attrs)
+    |> Repo.update()
+  end
+
   @doc "Deletes a memory."
   def delete_memory(%Memory{} = memory) do
     Repo.delete(memory)
