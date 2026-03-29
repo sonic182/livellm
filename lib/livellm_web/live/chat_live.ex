@@ -9,7 +9,7 @@ defmodule LivellmWeb.ChatLive do
   alias Livellm.Chats.ActiveTasks
   alias Livellm.Chats.Message.ReasoningStep
   alias Livellm.Config
-  alias Livellm.Memories.Tool, as: MemoriesTool
+  alias Livellm.Tools
   alias Livellm.Usage
   alias LlmComposer
   alias LlmComposer.FunctionCallHelpers
@@ -22,6 +22,7 @@ defmodule LivellmWeb.ChatLive do
   def mount(_params, _session, socket) do
     provider_configs = Config.list_provider_configs()
     enabled = Enum.find(provider_configs, & &1.enabled)
+    tool_catalog = Tools.catalog()
 
     {:ok,
      socket
@@ -36,7 +37,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_reasoning_effort, nil)
      |> assign(:waiting, false)
      |> assign(:stream_mode, true)
-     |> assign(:use_memory_tool, false)
+     |> assign(:tool_catalog, tool_catalog)
+     |> assign(:enabled_tool_names, [])
      |> assign(:tools_panel_open, false)
      |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
@@ -130,7 +132,7 @@ defmodule LivellmWeb.ChatLive do
           model: model,
           reasoning_effort: socket.assigns.selected_reasoning_effort,
           stream_mode: socket.assigns.stream_mode,
-          use_memory_tool: socket.assigns.use_memory_tool
+          enabled_tool_names: socket.assigns.enabled_tool_names
         }
 
         ActiveTasks.mark_active(chat.id)
@@ -202,19 +204,19 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:stream_mode, stream_mode)
      |> push_event("save_chat_settings", %{
        streaming: stream_mode,
-       use_memory_tool: socket.assigns.use_memory_tool
+       enabled_tool_names: socket.assigns.enabled_tool_names
      })}
   end
 
   @impl true
   def handle_event("restore_chat_settings", params, socket) do
     stream_mode = Map.get(params, "streaming", true) in [true, "true"]
-    use_memory_tool = Map.get(params, "use_memory_tool", false) in [true, "true"]
+    enabled_tool_names = parse_enabled_tool_names(Map.get(params, "enabled_tool_names", []))
 
     {:noreply,
      socket
      |> assign(:stream_mode, stream_mode)
-     |> assign(:use_memory_tool, use_memory_tool)}
+     |> assign(:enabled_tool_names, enabled_tool_names)}
   end
 
   @impl true
@@ -223,15 +225,15 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_event("toggle_tool", %{"tool" => "memory"}, socket) do
-    new_val = !socket.assigns.use_memory_tool
+  def handle_event("toggle_tool", %{"tool" => tool_name}, socket) do
+    enabled_tool_names = toggle_tool_name(socket.assigns.enabled_tool_names, tool_name)
 
     {:noreply,
      socket
-     |> assign(:use_memory_tool, new_val)
+     |> assign(:enabled_tool_names, enabled_tool_names)
      |> push_event("save_chat_settings", %{
        streaming: socket.assigns.stream_mode,
-       use_memory_tool: new_val
+       enabled_tool_names: enabled_tool_names
      })}
   end
 
@@ -342,6 +344,29 @@ defmodule LivellmWeb.ChatLive do
 
   defp refresh_chat_metrics(socket, _chat_id), do: socket
 
+  defp parse_enabled_tool_names(names) when is_list(names) do
+    available_tool_names = MapSet.new(socket_tool_names())
+
+    names
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.filter(&MapSet.member?(available_tool_names, &1))
+  end
+
+  defp parse_enabled_tool_names(_names), do: []
+
+  defp socket_tool_names do
+    Enum.map(Tools.catalog(), & &1.name)
+  end
+
+  defp toggle_tool_name(enabled_tool_names, tool_name) do
+    if tool_name in enabled_tool_names do
+      List.delete(enabled_tool_names, tool_name)
+    else
+      enabled_tool_names ++ [tool_name]
+    end
+  end
+
   defp complete_latest_running_tool_step(steps, tool_name) do
     steps
     |> Enum.reverse()
@@ -392,7 +417,7 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp run_llm_task(req, history, chat) do
-    functions = if req.use_memory_tool, do: MemoriesTool.definitions(), else: []
+    functions = Tools.enabled_definitions(req.enabled_tool_names)
     run_llm_loop(req, history, chat, functions)
   rescue
     error ->

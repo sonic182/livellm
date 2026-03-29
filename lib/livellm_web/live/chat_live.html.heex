@@ -355,42 +355,43 @@
       </div>
 
       <div class="flex flex-col gap-2 p-3">
-        <%!-- Memory tool card --%>
         <div
-          id="tool-memory"
+          :for={tool <- @tool_catalog}
+          id={"tool-#{tool.name}"}
           class={[
             "flex items-start gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors duration-150",
-            @use_memory_tool && "border-violet-500 bg-violet-500/10",
-            !@use_memory_tool && "border-base-300 hover:border-base-content/20 hover:bg-base-200"
+            tool.name in @enabled_tool_names && "border-violet-500 bg-violet-500/10",
+            tool.name not in @enabled_tool_names &&
+              "border-base-300 hover:border-base-content/20 hover:bg-base-200"
           ]}
           phx-click="toggle_tool"
-          phx-value-tool="memory"
+          phx-value-tool={tool.name}
         >
           <.icon
-            name="hero-bookmark"
+            name={if tool.name == "memory", do: "hero-bookmark", else: "hero-globe-alt"}
             class={[
               "size-4 mt-0.5 shrink-0",
-              @use_memory_tool && "text-violet-600",
-              !@use_memory_tool && "text-base-content/50"
+              tool.name in @enabled_tool_names && "text-violet-600",
+              tool.name not in @enabled_tool_names && "text-base-content/50"
             ]}
           />
           <div class="min-w-0 flex-1">
             <p class={[
               "text-sm font-medium leading-tight",
-              @use_memory_tool && "text-violet-400",
-              !@use_memory_tool && "text-base-content"
+              tool.name in @enabled_tool_names && "text-violet-400",
+              tool.name not in @enabled_tool_names && "text-base-content"
             ]}>
-              User Memory
+              {tool.title}
             </p>
             <p class="mt-0.5 text-xs text-base-content/50 leading-snug">
-              Lets the model read, save, update, and delete your saved memories.
+              {tool.description}
             </p>
           </div>
           <div class="shrink-0 mt-0.5">
             <div class={[
               "size-4 rounded-full border-2 transition-colors",
-              @use_memory_tool && "border-violet-500 bg-violet-500",
-              !@use_memory_tool && "border-base-300"
+              tool.name in @enabled_tool_names && "border-violet-500 bg-violet-500",
+              tool.name not in @enabled_tool_names && "border-base-300"
             ]} />
           </div>
         </div>
@@ -403,8 +404,8 @@
     const KEY = "livellm:stream_mode"
     export default {
       mounted() {
-        this.handleEvent("save_chat_settings", ({ streaming, use_memory_tool }) => {
-          localStorage.setItem(KEY, JSON.stringify({ streaming, use_memory_tool }))
+        this.handleEvent("save_chat_settings", ({ streaming, enabled_tool_names }) => {
+          localStorage.setItem(KEY, JSON.stringify({ streaming, enabled_tool_names }))
         })
         this.restore()
       },

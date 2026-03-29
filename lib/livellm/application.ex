@@ -5,14 +5,19 @@ defmodule Livellm.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
+    Logger.info("[livellm] loaded tools=#{inspect(loaded_tool_names())}")
+
     children = [
       LivellmWeb.Telemetry,
       Livellm.Repo,
       {Ecto.Migrator,
        repos: Application.fetch_env!(:livellm, :ecto_repos), skip: skip_migrations?()},
       {Finch, name: Livellm.Finch},
+      {Finch, name: Livellm.ToolFinch},
       {LlmComposer.Cache.Ets, []},
       {DNSCluster, query: Application.get_env(:livellm, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Livellm.PubSub},
@@ -39,5 +44,10 @@ defmodule Livellm.Application do
   defp skip_migrations? do
     # By default, sqlite migrations are run when using a release
     System.get_env("RELEASE_NAME") == nil
+  end
+
+  defp loaded_tool_names do
+    Livellm.Tools.catalog()
+    |> Enum.map(& &1.name)
   end
 end

@@ -14,6 +14,24 @@ config :livellm,
 config :llm_composer,
   tesla_adapter: {Tesla.Adapter.Finch, name: Livellm.Finch}
 
+config :livellm, Livellm.Tools.Http,
+  finch_name: Livellm.ToolFinch,
+  connect_timeout: 15_000,
+  receive_timeout: 30_000,
+  max_response_bytes: 200_000,
+  max_redirects: 3,
+  restricted_cidrs: [
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10"
+  ]
+
 # Configure the endpoint
 config :livellm, LivellmWeb.Endpoint,
   url: [host: "localhost"],

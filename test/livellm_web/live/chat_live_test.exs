@@ -688,7 +688,7 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(
              view,
              "#tool-memory",
-             "read, save, update, and delete your saved memories"
+             "Manage user memories"
            )
 
     render_change(element(view, "#chat-settings-form"), %{
