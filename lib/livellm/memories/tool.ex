@@ -49,7 +49,7 @@ defmodule Livellm.Memories.Tool do
             }
           },
           additionalProperties: false,
-          required: ["action"]
+          required: ["action", "id", "ids", "data", "title"]
         }
       }
     ]

@@ -512,6 +512,155 @@ defmodule LivellmWeb.ChatLiveTest do
            ]
   end
 
+  test "streaming openai responses tool loops execute fragmented tool calls in order", %{
+    conn: conn
+  } do
+    provider_config =
+      provider_config_fixture(
+        provider: "openai_responses",
+        enabled: true,
+        default_model: "gpt-5.4-mini"
+      )
+
+    {:ok, alpha} =
+      Livellm.Memories.create_memory(%{
+        title: "Alpha",
+        content: "First memory"
+      })
+
+    {:ok, beta} =
+      Livellm.Memories.create_memory(%{
+        title: "Beta",
+        content: "Contains beta keyword"
+      })
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
+        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai_responses,
+             status: :ok,
+             stream: [
+               ~s(data: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"Second reasoning"}]}}),
+               ~s(data: {"type":"response.output_text.delta","delta":"Final answer"}),
+               ~s(data: {"type":"response.completed","response":{"id":"resp_final_123","model":"gpt-5.4-mini","usage":{"input_tokens":50,"output_tokens":10,"total_tokens":60}}})
+             ]
+           }}
+        else
+          completed_tool_response =
+            "data: " <>
+              Jason.encode!(%{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_tool_123",
+                  "model" => "gpt-5.4-mini",
+                  "output" => [
+                    %{
+                      "type" => "reasoning",
+                      "summary" => [%{"type" => "summary_text", "text" => "First reasoning"}]
+                    },
+                    %{
+                      "type" => "function_call",
+                      "call_id" => "call_memory_list",
+                      "name" => "memory",
+                      "arguments" => ~s({"action":"list"})
+                    },
+                    %{
+                      "type" => "function_call",
+                      "call_id" => "call_memory_search",
+                      "name" => "memory",
+                      "arguments" => ~s({"action":"search","data":"beta"})
+                    }
+                  ],
+                  "usage" => %{
+                    "input_tokens" => 40,
+                    "output_tokens" => 8,
+                    "total_tokens" => 48
+                  }
+                }
+              })
+
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai_responses,
+             status: :ok,
+             stream: [
+               ~s(data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_memory_list","name":"memory"}}),
+               ~s(data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_memory_search","name":"memory"}}),
+               completed_tool_response
+             ]
+           }}
+        end
+      end
+    )
+
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(
+             view,
+             "#tool-memory",
+             "read, save, update, and delete your saved memories"
+           )
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => Integer.to_string(provider_config.id),
+      "model" => "gpt-5.4-mini",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    render_click(element(view, "#tool-memory"))
+    render_submit(element(view, "#message-form"), %{"message" => "Use memory tools"})
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-5.4-mini", first_history, nil,
+                    _chat_id, first_opts},
+                   1_000
+
+    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
+    assert Keyword.get(first_opts, :stream) == true
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-5.4-mini", second_history,
+                    nil, chat_id, second_opts},
+                   1_000
+
+    tool_results =
+      Enum.filter(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
+
+    assert Enum.map(tool_results, & &1.metadata["tool_call_id"]) == [
+             "call_memory_list",
+             "call_memory_search"
+           ]
+
+    assert Enum.map(tool_results, & &1.content) == [
+             "ID #{alpha.id} — Alpha\nID #{beta.id} — Beta",
+             "ID #{beta.id} — Beta"
+           ]
+
+    assert Keyword.get(second_opts, :stream) == true
+
+    _ = :sys.get_state(view.pid)
+
+    chat = Chats.get_chat!(chat_id)
+    assistant_msg = Chats.latest_assistant_message(chat)
+
+    assert assistant_msg.content == "Final answer"
+    assert assistant_msg.reasoning == "Second reasoning"
+
+    assert assistant_msg.reasoning_steps == [
+             %{"type" => "reasoning", "content" => "First reasoning"},
+             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
+             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
+             %{"type" => "reasoning", "content" => "Second reasoning"}
+           ]
+
+    assert Enum.map(assistant_msg.usage_breakdown, & &1.result_type) == ["tool_calls", "final"]
+  end
+
   test "tool_call_end completes only the latest running step for the same tool", %{conn: conn} do
     chat = ChatsFixtures.chat_fixture()
 

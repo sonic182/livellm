@@ -711,6 +711,7 @@ defmodule LivellmWeb.ChatLive do
       reasoning_details: [],
       final_chunk: nil,
       tool_calls_acc: %{},
+      tool_call_order: 0,
       reasoning_steps: [],
       chat: chat
     }
@@ -720,7 +721,12 @@ defmodule LivellmWeb.ChatLive do
       |> LlmComposer.parse_stream_response(provider, track_costs: true, model: model)
       |> Enum.reduce(initial_acc, &handle_stream_chunk/2)
 
-    tool_calls = build_tool_calls_from_stream_acc(final.tool_calls_acc)
+    tool_calls =
+      case build_tool_calls_from_completed_response(final.final_chunk, provider) do
+        calls when calls not in [nil, []] -> calls
+        _ -> build_tool_calls_from_stream_acc(final.tool_calls_acc)
+      end
+
     %{final | tool_calls_acc: nil} |> Map.put(:tool_calls, tool_calls)
   end
 
@@ -820,36 +826,12 @@ defmodule LivellmWeb.ChatLive do
 
   defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: deltas})
        when is_list(deltas) do
-    new_acc =
-      Enum.reduce(deltas, acc.tool_calls_acc, fn delta, tool_calls ->
-        idx = delta["index"]
+    Enum.reduce(deltas, acc, &accumulate_tool_call_delta/2)
+  end
 
-        if is_nil(idx) do
-          tool_calls
-        else
-          existing = Map.get(tool_calls, idx, %{})
-          args_so_far = get_in(existing, ["function", "arguments"]) || ""
-          new_args = args_so_far <> (get_in(delta, ["function", "arguments"]) || "")
-
-          # Deep-merge the "function" sub-map so the "name" from the first chunk
-          # is not overwritten by later chunks that only carry "arguments".
-          merged_function =
-            Map.merge(
-              Map.get(existing, "function", %{}),
-              Map.get(delta, "function", %{})
-            )
-            |> Map.put("arguments", new_args)
-
-          updated =
-            existing
-            |> Map.merge(delta)
-            |> Map.put("function", merged_function)
-
-          Map.put(tool_calls, idx, updated)
-        end
-      end)
-
-    %{acc | tool_calls_acc: new_acc}
+  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: delta})
+       when is_map(delta) do
+    accumulate_tool_call_delta(delta, acc)
   end
 
   defp maybe_accumulate_tool_call_delta(acc, _chunk), do: acc
@@ -863,10 +845,162 @@ defmodule LivellmWeb.ChatLive do
     sorted =
       tool_calls_acc
       |> Map.values()
-      |> Enum.sort_by(& &1["index"])
+      |> Enum.sort_by(&stream_tool_call_sort_key/1)
+      |> Enum.map(&Map.delete(&1, "_order"))
 
     FunctionCallExtractors.from_tool_calls(%{"tool_calls" => sorted})
   end
+
+  defp build_tool_calls_from_completed_response(
+         %{raw: %{"response" => %{"output" => output_items}}},
+         :open_ai_responses
+       )
+       when is_list(output_items) do
+    alias LlmComposer.FunctionCallExtractors
+
+    tool_calls =
+      output_items
+      |> Enum.filter(&(Map.get(&1, "type") == "function_call"))
+      |> Enum.map(fn item ->
+        %{
+          "id" => item["call_id"] || item["id"],
+          "type" => "function",
+          "function" => %{
+            "name" => item["name"],
+            "arguments" => item["arguments"] || "{}"
+          }
+        }
+      end)
+
+    case tool_calls do
+      [] -> nil
+      calls -> FunctionCallExtractors.from_tool_calls(%{"tool_calls" => calls})
+    end
+  end
+
+  defp build_tool_calls_from_completed_response(_final_chunk, _provider), do: nil
+
+  defp accumulate_tool_call_delta(%{"index" => index} = delta, acc) when is_integer(index) do
+    key = {:index, index}
+    order = tool_call_order(acc, key, index)
+
+    updated =
+      acc.tool_calls_acc
+      |> Map.get(key, %{})
+      |> merge_tool_call_delta(%{
+        "id" => delta["id"],
+        "type" => delta["type"],
+        "index" => index,
+        "_order" => order,
+        "function" => %{
+          "name" => get_in(delta, ["function", "name"]),
+          "arguments" => get_in(delta, ["function", "arguments"])
+        }
+      })
+
+    put_tool_call(acc, key, updated)
+  end
+
+  defp accumulate_tool_call_delta(
+         %{"type" => "function_call_started", "call_id" => call_id} = delta,
+         acc
+       )
+       when is_binary(call_id) and call_id != "" do
+    key = {:call_id, call_id}
+    order = tool_call_order(acc, key)
+
+    updated =
+      acc.tool_calls_acc
+      |> Map.get(key, %{})
+      |> merge_tool_call_delta(%{
+        "id" => call_id,
+        "type" => "function",
+        "_order" => order,
+        "function" => %{
+          "name" => delta["name"],
+          "arguments" => nil
+        }
+      })
+
+    put_tool_call(acc, key, updated)
+  end
+
+  defp accumulate_tool_call_delta(
+         %{"type" => "function_call_arguments_delta", "call_id" => call_id} = delta,
+         acc
+       )
+       when is_binary(call_id) and call_id != "" do
+    key = {:call_id, call_id}
+    order = tool_call_order(acc, key)
+
+    updated =
+      acc.tool_calls_acc
+      |> Map.get(key, %{})
+      |> merge_tool_call_delta(%{
+        "id" => call_id,
+        "type" => "function",
+        "_order" => order,
+        "function" => %{
+          "name" => nil,
+          "arguments" => delta["arguments_delta"]
+        }
+      })
+
+    put_tool_call(acc, key, updated)
+  end
+
+  defp accumulate_tool_call_delta(_delta, acc), do: acc
+
+  defp merge_tool_call_delta(existing, incoming) do
+    existing_function = Map.get(existing, "function", %{})
+    incoming_function = Map.get(incoming, "function", %{})
+
+    %{
+      "id" => incoming["id"] || existing["id"],
+      "type" => incoming["type"] || existing["type"] || "function",
+      "function" => %{
+        "name" => incoming_function["name"] || existing_function["name"],
+        "arguments" =>
+          (existing_function["arguments"] || "") <> (incoming_function["arguments"] || "")
+      },
+      "_order" => incoming["_order"] || existing["_order"]
+    }
+    |> maybe_put_index(incoming["index"] || existing["index"])
+  end
+
+  defp tool_call_order(acc, key, fallback_order \\ nil) do
+    case Map.get(acc.tool_calls_acc, key) do
+      %{"_order" => order} ->
+        order
+
+      _ ->
+        fallback_order || acc.tool_call_order + 1
+    end
+  end
+
+  defp put_tool_call(acc, key, tool_call) do
+    next_order =
+      case Map.get(acc.tool_calls_acc, key) do
+        nil -> max(acc.tool_call_order, tool_call["_order"] || acc.tool_call_order)
+        _existing -> acc.tool_call_order
+      end
+
+    %{
+      acc
+      | tool_calls_acc: Map.put(acc.tool_calls_acc, key, tool_call),
+        tool_call_order: next_order
+    }
+  end
+
+  defp stream_tool_call_sort_key(tool_call) do
+    case tool_call["index"] do
+      index when is_integer(index) -> {0, index}
+      _ -> {1, tool_call["_order"] || 0}
+    end
+  end
+
+  defp maybe_put_index(tool_call, nil), do: tool_call
+  defp maybe_put_index(tool_call, index), do: Map.put(tool_call, "index", index)
 
   defp tool_call_entry(%{name: name, arguments: arguments, result: result}) do
     %{"name" => name, "arguments" => arguments, "result" => to_string(result)}

@@ -16,6 +16,7 @@ defmodule Livellm.Memories.ToolTest do
              "delete"
            ]
 
+    assert definition.schema.required == ["action", "id", "ids", "data", "title"]
     assert get_in(definition.schema, [:properties, :id, :type]) == ["integer", "null"]
     assert get_in(definition.schema, [:properties, :ids, :type]) == ["array", "null"]
     assert get_in(definition.schema, [:properties, :ids, :items, :type]) == "integer"
