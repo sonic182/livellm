@@ -512,6 +512,90 @@ defmodule LivellmWeb.ChatLiveTest do
            ]
   end
 
+  test "tool execution errors are returned to the model instead of crashing the turn", %{
+    conn: conn
+  } do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
+        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
+          assert [
+                   %LlmComposer.Message{
+                     type: :tool_result,
+                     content: <<"Error: invalid arguments", _::binary>>,
+                     metadata: %{"tool_call_id" => "call_memory_1"}
+                   }
+                 ] = Enum.filter(history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
+
+          FakeLlmRunner.success_response(%{
+            provider: :open_ai,
+            main_response: %LlmComposer.Message{
+              type: :assistant,
+              content: "Recovered after tool error"
+            }
+          })
+        else
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai,
+             status: :ok,
+             main_response: %LlmComposer.Message{
+               type: :assistant,
+               content: nil,
+               function_calls: [
+                 %LlmComposer.FunctionCall{
+                   id: "call_memory_1",
+                   name: "memory",
+                   arguments: "{bad json"
+                 }
+               ]
+             }
+           }}
+        end
+      end
+    )
+
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => Integer.to_string(provider_config.id),
+      "model" => "gpt-4.1-mini",
+      "reasoning_effort" => "",
+      "streaming" => "false"
+    })
+
+    render_click(element(view, "#tool-memory"))
+    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", first_history, nil,
+                    _chat_id, _first_opts}
+
+    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", second_history,
+                    nil, _chat_id, _second_opts}
+
+    assert [
+             %LlmComposer.Message{
+               type: :tool_result,
+               content: <<"Error: invalid arguments", _::binary>>,
+               metadata: %{"tool_call_id" => "call_memory_1"}
+             }
+           ] = Enum.filter(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
+
+    _ = :sys.get_state(view.pid)
+
+    chat = Chats.list_chats() |> List.first()
+    assistant_msg = Chats.latest_assistant_message(chat)
+
+    assert assistant_msg.content == "Recovered after tool error"
+  end
+
   test "streaming openai responses tool loops execute fragmented tool calls in order", %{
     conn: conn
   } do

@@ -31,9 +31,14 @@ defmodule Livellm.Chats.LlmRunner do
       track_costs: true
     }
 
-    messages = Enum.map(history, &to_llm_message/1)
+    messages = messages_for_completion(history)
 
     LlmComposer.run_completion(settings, messages)
+  end
+
+  @doc false
+  def messages_for_completion(history) when is_list(history) do
+    Enum.flat_map(history, &to_llm_messages/1)
   end
 
   @doc false
@@ -66,15 +71,129 @@ defmodule Livellm.Chats.LlmRunner do
 
   defp maybe_put_functions(opts, _), do: opts
 
-  defp to_llm_message(%LlmComposer.Message{} = msg), do: msg
+  defp to_llm_messages(%LlmComposer.Message{} = msg), do: [msg]
 
-  defp to_llm_message(msg) do
+  defp to_llm_messages(%{role: "assistant"} = msg) do
+    assistant_message = build_message(msg)
+
+    case build_replayed_tool_messages(msg) do
+      [] ->
+        [assistant_message]
+
+      replayed_tool_messages ->
+        [build_tool_call_request_message(msg), replayed_tool_messages, assistant_message]
+        |> List.flatten()
+    end
+  end
+
+  defp to_llm_messages(msg), do: [build_message(msg)]
+
+  defp build_message(msg) do
     %LlmComposer.Message{
       type: message_type(msg.role),
       content: msg.content,
       reasoning: msg.reasoning,
       reasoning_details: msg.reasoning_details
     }
+  end
+
+  defp build_tool_call_request_message(msg) do
+    %LlmComposer.Message{
+      type: :assistant,
+      content: nil,
+      function_calls: build_function_calls(msg)
+    }
+  end
+
+  defp build_replayed_tool_messages(msg) do
+    msg
+    |> build_tool_call_entries()
+    |> Enum.map(fn entry ->
+      %LlmComposer.Message{
+        type: :tool_result,
+        content: fetch_tool_call_field(entry, "result"),
+        metadata: %{"tool_call_id" => fetch_tool_call_field(entry, "id")}
+      }
+    end)
+  end
+
+  defp build_function_calls(msg) do
+    msg
+    |> build_tool_call_entries()
+    |> Enum.map(fn entry ->
+      %LlmComposer.FunctionCall{
+        id: fetch_tool_call_field(entry, "id"),
+        name: fetch_tool_call_field(entry, "name"),
+        arguments: fetch_tool_call_field(entry, "arguments"),
+        type: "function"
+      }
+    end)
+  end
+
+  defp build_tool_call_entries(msg) do
+    msg
+    |> tool_calls()
+    |> List.wrap()
+    |> Enum.with_index(1)
+    |> Enum.map(fn {entry, index} ->
+      entry
+      |> ensure_tool_call_id(msg, index)
+      |> ensure_tool_call_arguments()
+    end)
+    |> Enum.filter(&replayable_tool_call?/1)
+  end
+
+  defp replayable_tool_call?(entry) do
+    is_binary(fetch_tool_call_field(entry, "id")) and
+      is_binary(fetch_tool_call_field(entry, "name")) and
+      is_binary(fetch_tool_call_field(entry, "result"))
+  end
+
+  defp ensure_tool_call_id(entry, msg, index) do
+    case fetch_tool_call_field(entry, "id") do
+      id when is_binary(id) and id != "" ->
+        entry
+
+      _ ->
+        put_tool_call_field(entry, "id", "persisted_tool_call_#{msg.id || "message"}_#{index}")
+    end
+  end
+
+  defp ensure_tool_call_arguments(entry) do
+    case fetch_tool_call_field(entry, "arguments") do
+      arguments when is_binary(arguments) and arguments != "" ->
+        entry
+
+      _ ->
+        put_tool_call_field(entry, "arguments", "{}")
+    end
+  end
+
+  defp tool_calls(%{tool_calls: tool_calls}), do: tool_calls
+  defp tool_calls(_msg), do: nil
+
+  defp fetch_tool_call_field(entry, "id") when is_map(entry),
+    do: Map.get(entry, "id") || Map.get(entry, :id)
+
+  defp fetch_tool_call_field(entry, "name") when is_map(entry),
+    do: Map.get(entry, "name") || Map.get(entry, :name)
+
+  defp fetch_tool_call_field(entry, "arguments") when is_map(entry),
+    do: Map.get(entry, "arguments") || Map.get(entry, :arguments)
+
+  defp fetch_tool_call_field(entry, "result") when is_map(entry),
+    do: Map.get(entry, "result") || Map.get(entry, :result)
+
+  defp put_tool_call_field(entry, "id", value) when is_map(entry) do
+    if Map.has_key?(entry, "id"),
+      do: Map.put(entry, "id", value),
+      else: Map.put(entry, :id, value)
+  end
+
+  defp put_tool_call_field(entry, "arguments", value) when is_map(entry) do
+    if Map.has_key?(entry, "arguments"),
+      do: Map.put(entry, "arguments", value),
+      else: Map.put(entry, :arguments, value)
   end
 
   defp provider_module("openai"), do: LlmComposer.Providers.OpenAI

@@ -53,4 +53,80 @@ defmodule Livellm.Chats.LlmRunnerTest do
 
     assert {:error, _reason} = LlmRunner.run(config, "gpt-4.1-mini", history, nil, 1)
   end
+
+  test "messages_for_completion/1 expands persisted tool turns into assistant, tool_result, and final assistant messages" do
+    history = [
+      %{role: "user", content: "Remember this", reasoning: nil, reasoning_details: nil},
+      %{
+        id: 12,
+        role: "assistant",
+        content: "Saved it for later.",
+        reasoning: "Final reasoning",
+        reasoning_details: [%{"text" => "First reasoning"}, %{"text" => "Final reasoning"}],
+        tool_calls: [
+          %{
+            "id" => "call_memory_1",
+            "name" => "memory",
+            "arguments" => ~s({"action":"write","title":"Note","data":"Remember this"}),
+            "result" => "Saved memory ID 42."
+          }
+        ]
+      }
+    ]
+
+    assert [
+             %LlmComposer.Message{type: :user, content: "Remember this"},
+             %LlmComposer.Message{
+               type: :assistant,
+               content: nil,
+               function_calls: [
+                 %LlmComposer.FunctionCall{
+                   id: "call_memory_1",
+                   name: "memory",
+                   arguments: ~s({"action":"write","title":"Note","data":"Remember this"})
+                 }
+               ]
+             },
+             %LlmComposer.Message{
+               type: :tool_result,
+               content: "Saved memory ID 42.",
+               metadata: %{"tool_call_id" => "call_memory_1"}
+             },
+             %LlmComposer.Message{
+               type: :assistant,
+               content: "Saved it for later.",
+               reasoning: "Final reasoning",
+               reasoning_details: [%{"text" => "First reasoning"}, %{"text" => "Final reasoning"}]
+             }
+           ] = LlmRunner.messages_for_completion(history)
+  end
+
+  test "messages_for_completion/1 synthesizes stable tool call ids for legacy persisted entries" do
+    history = [
+      %{
+        id: 99,
+        role: "assistant",
+        content: "Done",
+        reasoning: nil,
+        reasoning_details: nil,
+        tool_calls: [
+          %{"name" => "memory", "arguments" => ~s({"action":"list"}), "result" => "No memories."}
+        ]
+      }
+    ]
+
+    assert [
+             %LlmComposer.Message{
+               type: :assistant,
+               function_calls: [
+                 %LlmComposer.FunctionCall{id: "persisted_tool_call_99_1", name: "memory"}
+               ]
+             },
+             %LlmComposer.Message{
+               type: :tool_result,
+               metadata: %{"tool_call_id" => "persisted_tool_call_99_1"}
+             },
+             %LlmComposer.Message{type: :assistant, content: "Done"}
+           ] = LlmRunner.messages_for_completion(history)
+  end
 end

@@ -241,10 +241,7 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:waiting, false)
      |> clear_transient_trace()
-     |> assign(
-       :chat_metrics,
-       Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
-     )
+     |> refresh_chat_metrics(assistant_msg.chat_id)
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -309,10 +306,7 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:waiting, false)
      |> clear_transient_trace()
-     |> assign(
-       :chat_metrics,
-       Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
-     )
+     |> refresh_chat_metrics(assistant_msg.chat_id)
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -335,6 +329,18 @@ defmodule LivellmWeb.ChatLive do
     |> assign(:streaming_reasoning, nil)
     |> assign(:reasoning_steps, [])
   end
+
+  defp refresh_chat_metrics(socket, chat_id) when is_integer(chat_id) do
+    chat =
+      case socket.assigns.chat do
+        %{id: ^chat_id} = current_chat -> current_chat
+        _ -> Chats.get_chat!(chat_id)
+      end
+
+    assign(socket, :chat_metrics, chat |> Chats.list_messages() |> Usage.aggregate_chat_metrics())
+  end
+
+  defp refresh_chat_metrics(socket, _chat_id), do: socket
 
   defp complete_latest_running_tool_step(steps, tool_name) do
     steps
@@ -467,18 +473,7 @@ defmodule LivellmWeb.ChatLive do
 
         provider_mod = provider_module(req.provider_config.provider)
 
-        executed =
-          Enum.map(calls, fn fc ->
-            broadcast(chat.id, {:tool_call_start, chat, fc.name})
-            {:ok, result} = FunctionExecutor.execute(fc, functions)
-
-            Logger.debug(
-              "[chat_live] tool_result chat_id=#{chat.id} name=#{fc.name} result=#{inspect(result.result)}"
-            )
-
-            broadcast(chat.id, {:tool_call_end, chat, fc.name})
-            result
-          end)
+        executed = execute_tool_calls(chat, calls, functions)
 
         dummy_user = %LlmComposer.Message{type: :user, content: ""}
 
@@ -546,18 +541,7 @@ defmodule LivellmWeb.ChatLive do
           "[chat_live] stream tool_calls chat_id=#{chat.id} iteration=#{iteration} calls=#{inspect(Enum.map(calls, & &1.name))}"
         )
 
-        executed =
-          Enum.map(calls, fn fc ->
-            broadcast(chat.id, {:tool_call_start, chat, fc.name})
-            {:ok, result} = FunctionExecutor.execute(fc, functions)
-
-            Logger.debug(
-              "[chat_live] tool_result chat_id=#{chat.id} name=#{fc.name} result=#{inspect(result.result)}"
-            )
-
-            broadcast(chat.id, {:tool_call_end, chat, fc.name})
-            result
-          end)
+        executed = execute_tool_calls(chat, calls, functions)
 
         asst_msg = %LlmComposer.Message{
           type: :assistant,
@@ -1002,8 +986,47 @@ defmodule LivellmWeb.ChatLive do
   defp maybe_put_index(tool_call, nil), do: tool_call
   defp maybe_put_index(tool_call, index), do: Map.put(tool_call, "index", index)
 
-  defp tool_call_entry(%{name: name, arguments: arguments, result: result}) do
-    %{"name" => name, "arguments" => arguments, "result" => to_string(result)}
+  defp execute_tool_calls(chat, calls, functions) do
+    Enum.map(calls, fn %LlmComposer.FunctionCall{} = function_call ->
+      broadcast(chat.id, {:tool_call_start, chat, function_call.name})
+
+      executed_call =
+        case FunctionExecutor.execute(function_call, functions) do
+          {:ok, executed} ->
+            executed
+
+          {:error, reason} ->
+            Logger.warning(
+              "[chat_live] tool_error chat_id=#{chat.id} name=#{function_call.name} reason=#{inspect(reason)}"
+            )
+
+            %LlmComposer.FunctionCall{
+              function_call
+              | result: "Error: #{format_tool_error(reason)}"
+            }
+        end
+
+      Logger.debug(
+        "[chat_live] tool_result chat_id=#{chat.id} name=#{function_call.name} result=#{inspect(executed_call.result)}"
+      )
+
+      broadcast(chat.id, {:tool_call_end, chat, function_call.name})
+      executed_call
+    end)
+  end
+
+  defp format_tool_error({:invalid_arguments, reason}), do: "invalid arguments (#{reason})"
+  defp format_tool_error({:execution_failed, reason}), do: "execution failed (#{reason})"
+  defp format_tool_error(:function_not_found), do: "unknown tool"
+  defp format_tool_error(reason), do: inspect(reason)
+
+  defp tool_call_entry(%{id: id, name: name, arguments: arguments, result: result}) do
+    %{
+      "id" => id,
+      "name" => name,
+      "arguments" => arguments,
+      "result" => to_string(result)
+    }
   end
 
   defp build_reasoning_steps(reasoning, reasoning_details, tool_calls_history) do
