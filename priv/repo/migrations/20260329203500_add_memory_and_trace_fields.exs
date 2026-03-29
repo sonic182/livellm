@@ -1,4 +1,4 @@
-defmodule Livellm.Repo.Migrations.CreateUserMemories do
+defmodule Livellm.Repo.Migrations.AddMemoryAndTraceFields do
   use Ecto.Migration
 
   def change do
@@ -7,6 +7,12 @@ defmodule Livellm.Repo.Migrations.CreateUserMemories do
       add :content, :string, null: false
 
       timestamps(type: :utc_datetime)
+    end
+
+    alter table(:messages) do
+      add :tool_calls, {:array, :map}
+      add :reasoning_steps, :json
+      add :usage_breakdown, :json
     end
   end
 end
