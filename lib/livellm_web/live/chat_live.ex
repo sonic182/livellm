@@ -406,8 +406,7 @@ defmodule LivellmWeb.ChatLive do
          chat,
          functions,
          iteration \\ 0,
-         tool_calls_history \\ [],
-         reasoning_steps \\ []
+         trace_acc \\ empty_trace_acc()
        )
 
   defp run_llm_loop(
@@ -416,15 +415,14 @@ defmodule LivellmWeb.ChatLive do
          chat,
          _functions,
          iteration,
-         _tool_calls_history,
-         _reasoning_steps
+         _trace_acc
        )
        when iteration >= @max_tool_iterations do
     Logger.error("[chat_live] tool loop limit reached chat_id=#{chat.id} iteration=#{iteration}")
     handle_final_llm_result({:error, :tool_loop_limit}, chat, req)
   end
 
-  defp run_llm_loop(req, history, chat, functions, iteration, tool_calls_history, reasoning_steps) do
+  defp run_llm_loop(req, history, chat, functions, iteration, trace_acc) do
     req
     |> run_llm_request(history, chat.id, functions: functions)
     |> handle_llm_result(
@@ -433,8 +431,7 @@ defmodule LivellmWeb.ChatLive do
       history,
       functions,
       iteration,
-      tool_calls_history,
-      reasoning_steps
+      trace_acc
     )
   end
 
@@ -459,8 +456,7 @@ defmodule LivellmWeb.ChatLive do
          history,
          [_ | _] = functions,
          iteration,
-         tool_calls_history,
-         reasoning_steps
+         trace_acc
        ) do
     case LlmResponse.function_calls(llm_response) do
       calls when calls not in [nil, []] ->
@@ -490,10 +486,15 @@ defmodule LivellmWeb.ChatLive do
 
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
+        current_reasoning_details = llm_response.main_response.reasoning_details || []
 
-        next_reasoning_steps =
-          reasoning_steps ++
-            build_reasoning_steps(llm_response.main_response.reasoning, new_tool_calls)
+        next_trace_acc =
+          accumulate_trace(
+            trace_acc,
+            llm_response.main_response.reasoning,
+            current_reasoning_details,
+            new_tool_calls
+          )
 
         run_llm_loop(
           req,
@@ -501,18 +502,11 @@ defmodule LivellmWeb.ChatLive do
           chat,
           functions,
           iteration + 1,
-          tool_calls_history ++ new_tool_calls,
-          next_reasoning_steps
+          next_trace_acc
         )
 
       _ ->
-        handle_final_llm_result(
-          {:ok, llm_response},
-          chat,
-          req,
-          tool_calls_history,
-          reasoning_steps
-        )
+        handle_final_llm_result({:ok, llm_response}, chat, req, trace_acc)
     end
   end
 
@@ -524,8 +518,7 @@ defmodule LivellmWeb.ChatLive do
          history,
          [_ | _] = functions,
          iteration,
-         tool_calls_history,
-         reasoning_steps
+         trace_acc
        )
        when not is_nil(stream) do
     Logger.debug(
@@ -553,6 +546,7 @@ defmodule LivellmWeb.ChatLive do
               "[chat_live] tool_result chat_id=#{chat.id} name=#{fc.name} result=#{inspect(result.result)}"
             )
 
+            broadcast(chat.id, {:tool_call_end, chat, fc.name})
             result
           end)
 
@@ -565,8 +559,8 @@ defmodule LivellmWeb.ChatLive do
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
 
-        next_reasoning_steps =
-          reasoning_steps ++ build_reasoning_steps(final.reasoning, new_tool_calls)
+        next_trace_acc =
+          accumulate_trace(trace_acc, final.reasoning, final.reasoning_details, new_tool_calls)
 
         run_llm_loop(
           req,
@@ -574,12 +568,11 @@ defmodule LivellmWeb.ChatLive do
           chat,
           functions,
           iteration + 1,
-          tool_calls_history ++ new_tool_calls,
-          next_reasoning_steps
+          next_trace_acc
         )
 
       _ ->
-        save_stream_result(final, chat, tool_calls_history, reasoning_steps)
+        save_stream_result(final, chat, trace_acc)
     end
   end
 
@@ -590,20 +583,18 @@ defmodule LivellmWeb.ChatLive do
          _history,
          _functions,
          _iteration,
-         tool_calls_history,
-         reasoning_steps
+         trace_acc
        ) do
-    handle_final_llm_result(result, chat, req, tool_calls_history, reasoning_steps)
+    handle_final_llm_result(result, chat, req, trace_acc)
   end
 
-  defp handle_final_llm_result(result, chat, req, tool_calls_history \\ [], reasoning_steps \\ [])
+  defp handle_final_llm_result(result, chat, req, trace_acc \\ empty_trace_acc())
 
   defp handle_final_llm_result(
          {:ok, %{stream: stream, provider: provider}},
          chat,
          req,
-         tool_calls_history,
-         reasoning_steps
+         trace_acc
        )
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
@@ -614,30 +605,29 @@ defmodule LivellmWeb.ChatLive do
       "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
     )
 
-    save_stream_result(final, chat, tool_calls_history, reasoning_steps)
+    save_stream_result(final, chat, trace_acc)
   end
 
   defp handle_final_llm_result(
          {:ok, llm_response},
          chat,
          _req,
-         tool_calls_history,
-         reasoning_steps
+         trace_acc
        ) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
-    all_reasoning_steps = reasoning_steps ++ build_reasoning_steps(reasoning, [])
+    final_trace_acc = accumulate_trace(trace_acc, reasoning, reasoning_details, [])
 
     attrs =
       %{
         role: "assistant",
         content: content,
         reasoning: reasoning,
-        reasoning_steps: all_reasoning_steps,
-        reasoning_details: reasoning_details,
+        reasoning_steps: final_trace_acc.reasoning_steps,
+        reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
         raw_response: llm_response.raw,
-        tool_calls: blank_list_to_nil(tool_calls_history)
+        tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
       }
       |> Map.merge(Usage.cost_tracking_attrs(llm_response))
 
@@ -658,16 +648,15 @@ defmodule LivellmWeb.ChatLive do
          {:error, reason},
          chat,
          _req,
-         _tool_calls_history,
-         _reasoning_steps
+         _trace_acc
        ) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp save_stream_result(final, chat, tool_calls_history, reasoning_steps) do
+  defp save_stream_result(final, chat, trace_acc) do
     case Chats.create_message(
            chat,
-           build_stream_message_attrs(final, tool_calls_history, reasoning_steps)
+           build_stream_message_attrs(final, trace_acc)
          ) do
       {:ok, assistant_msg} ->
         broadcast(chat.id, {:stream_done, chat, assistant_msg})
@@ -768,17 +757,17 @@ defmodule LivellmWeb.ChatLive do
     acc
   end
 
-  defp build_stream_message_attrs(final, tool_calls_history, reasoning_steps) do
-    all_reasoning_steps = reasoning_steps ++ build_reasoning_steps(final.reasoning, [])
+  defp build_stream_message_attrs(final, trace_acc) do
+    final_trace_acc = accumulate_trace(trace_acc, final.reasoning, final.reasoning_details, [])
 
     %{
       role: "assistant",
       content: final.content,
       reasoning: blank_to_nil(final.reasoning),
-      reasoning_steps: all_reasoning_steps,
-      reasoning_details: blank_list_to_nil(final.reasoning_details),
+      reasoning_steps: final_trace_acc.reasoning_steps,
+      reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
       raw_response: final.final_chunk && final.final_chunk.raw,
-      tool_calls: blank_list_to_nil(tool_calls_history)
+      tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
     }
     |> Map.merge(Usage.stream_chunk_attrs(final.final_chunk))
   end
@@ -837,16 +826,20 @@ defmodule LivellmWeb.ChatLive do
     %{"name" => name, "arguments" => arguments, "result" => to_string(result)}
   end
 
-  defp build_reasoning_steps(reasoning, tool_calls_history) do
+  defp build_reasoning_steps(reasoning, reasoning_details, tool_calls_history) do
     []
-    |> maybe_add_reasoning_step(reasoning)
+    |> maybe_add_reasoning_step(reasoning, reasoning_details)
     |> maybe_add_tool_steps(tool_calls_history)
   end
 
-  defp maybe_add_reasoning_step(steps, reasoning) when reasoning in [nil, ""], do: steps
+  defp maybe_add_reasoning_step(steps, reasoning, reasoning_details) do
+    case reasoning_content(reasoning, reasoning_details) do
+      nil ->
+        steps
 
-  defp maybe_add_reasoning_step(steps, reasoning) do
-    steps ++ [%{"type" => "reasoning", "content" => reasoning}]
+      content ->
+        steps ++ [%{"type" => "reasoning", "content" => content}]
+    end
   end
 
   defp maybe_add_tool_steps(steps, tool_calls_history) when tool_calls_history in [nil, []],
@@ -858,6 +851,45 @@ defmodule LivellmWeb.ChatLive do
         %{"type" => "tool_call", "tool_name" => name, "status" => "completed"}
       end)
   end
+
+  defp empty_trace_acc do
+    %{
+      tool_calls_history: [],
+      reasoning_steps: [],
+      reasoning_details_history: []
+    }
+  end
+
+  defp accumulate_trace(trace_acc, reasoning, reasoning_details, tool_calls) do
+    %{
+      tool_calls_history: trace_acc.tool_calls_history ++ tool_calls,
+      reasoning_steps:
+        trace_acc.reasoning_steps ++
+          build_reasoning_steps(reasoning, reasoning_details, tool_calls),
+      reasoning_details_history:
+        trace_acc.reasoning_details_history ++ List.wrap(reasoning_details)
+    }
+  end
+
+  defp reasoning_content(reasoning, _reasoning_details) when reasoning not in [nil, ""],
+    do: reasoning
+
+  defp reasoning_content(_reasoning, reasoning_details) do
+    reasoning_details
+    |> List.wrap()
+    |> Enum.map(&reasoning_detail_text/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+    |> blank_to_nil()
+  end
+
+  defp reasoning_detail_text(%{"text" => text}) when is_binary(text), do: text
+  defp reasoning_detail_text(%{text: text}) when is_binary(text), do: text
+  defp reasoning_detail_text(%{"summary" => summary}) when is_binary(summary), do: summary
+  defp reasoning_detail_text(%{summary: summary}) when is_binary(summary), do: summary
+  defp reasoning_detail_text(%{"content" => content}) when is_binary(content), do: content
+  defp reasoning_detail_text(%{content: content}) when is_binary(content), do: content
+  defp reasoning_detail_text(_detail), do: ""
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
