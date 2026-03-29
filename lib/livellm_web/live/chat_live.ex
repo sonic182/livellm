@@ -36,6 +36,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, false)
      |> assign(:stream_mode, true)
      |> assign(:use_memory_tool, false)
+     |> assign(:tools_panel_open, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
@@ -178,7 +179,6 @@ defmodule LivellmWeb.ChatLive do
     selected_model = resolve_model(params, socket.assigns, new_provider_id)
     reasoning_effort = parse_effort(params["reasoning_effort"])
     stream_mode = params["streaming"] == "true"
-    use_memory_tool = params["use_memory_tool"] == "true"
 
     socket =
       if socket.assigns.chat do
@@ -200,10 +200,9 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
-     |> assign(:use_memory_tool, use_memory_tool)
      |> push_event("save_chat_settings", %{
        streaming: stream_mode,
-       use_memory_tool: use_memory_tool
+       use_memory_tool: socket.assigns.use_memory_tool
      })}
   end
 
@@ -216,6 +215,24 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:stream_mode, stream_mode)
      |> assign(:use_memory_tool, use_memory_tool)}
+  end
+
+  @impl true
+  def handle_event("toggle_tools_panel", _params, socket) do
+    {:noreply, assign(socket, :tools_panel_open, !socket.assigns.tools_panel_open)}
+  end
+
+  @impl true
+  def handle_event("toggle_tool", %{"tool" => "memory"}, socket) do
+    new_val = !socket.assigns.use_memory_tool
+
+    {:noreply,
+     socket
+     |> assign(:use_memory_tool, new_val)
+     |> push_event("save_chat_settings", %{
+       streaming: socket.assigns.stream_mode,
+       use_memory_tool: new_val
+     })}
   end
 
   @impl true

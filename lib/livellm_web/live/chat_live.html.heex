@@ -169,16 +169,21 @@
               density={:compact}
               class="min-h-[2.35rem] pt-1 sm:self-center"
             />
-
-            <.checkbox_input
-              id="memory-tool-toggle"
-              name="use_memory_tool"
-              checked={@use_memory_tool}
-              label="Memory"
-              density={:compact}
-              class="min-h-[2.35rem] pt-1 sm:self-center"
-            />
           </form>
+
+          <button
+            id="tools-panel-btn"
+            phx-click="toggle_tools_panel"
+            class={[
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150 shrink-0",
+              @tools_panel_open && "bg-violet-600 text-white",
+              !@tools_panel_open &&
+                "bg-base-200 text-base-content/60 hover:text-base-content hover:bg-base-300"
+            ]}
+            title="Toggle tools panel"
+          >
+            <.icon name="hero-wrench-screwdriver" class="size-3.5" /> Tools
+          </button>
         <% end %>
       </header>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".AutosizeInput">
@@ -307,6 +312,68 @@
         </p>
       </div>
     </div>
+
+    <%!-- Tools panel --%>
+    <aside
+      id="tools-panel"
+      class={[
+        "flex flex-col w-72 shrink-0 border-l border-base-300 bg-base-100 overflow-y-auto",
+        !@tools_panel_open && "hidden"
+      ]}
+    >
+      <div class="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
+        <span class="text-sm font-semibold text-base-content">Tools</span>
+        <button
+          phx-click="toggle_tools_panel"
+          id="tools-panel-close"
+          class="p-1 rounded text-base-content/40 hover:text-base-content hover:bg-base-300 transition-colors"
+        >
+          <.icon name="hero-x-mark" class="size-4" />
+        </button>
+      </div>
+
+      <div class="flex flex-col gap-2 p-3">
+        <%!-- Memory tool card --%>
+        <div
+          id="tool-memory"
+          class={[
+            "flex items-start gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors duration-150",
+            @use_memory_tool && "border-violet-500 bg-violet-500/10",
+            !@use_memory_tool && "border-base-300 hover:border-base-content/20 hover:bg-base-200"
+          ]}
+          phx-click="toggle_tool"
+          phx-value-tool="memory"
+        >
+          <.icon
+            name="hero-bookmark"
+            class={[
+              "size-4 mt-0.5 shrink-0",
+              @use_memory_tool && "text-violet-600",
+              !@use_memory_tool && "text-base-content/50"
+            ]}
+          />
+          <div class="min-w-0 flex-1">
+            <p class={[
+              "text-sm font-medium leading-tight",
+              @use_memory_tool && "text-violet-400",
+              !@use_memory_tool && "text-base-content"
+            ]}>
+              User Memory
+            </p>
+            <p class="mt-0.5 text-xs text-base-content/50 leading-snug">
+              Lets the model retrieve your saved memories.
+            </p>
+          </div>
+          <div class="shrink-0 mt-0.5">
+            <div class={[
+              "size-4 rounded-full border-2 transition-colors",
+              @use_memory_tool && "border-violet-500 bg-violet-500",
+              !@use_memory_tool && "border-base-300"
+            ]} />
+          </div>
+        </div>
+      </div>
+    </aside>
   </div>
 
   <%!-- Persist stream mode globally in localStorage --%>
