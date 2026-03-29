@@ -23,6 +23,7 @@ defmodule Livellm.Chats.LlmRunner do
       |> maybe_add_cache_key(config.provider, chat_id)
       |> maybe_add_previous_response_id(config, model, history)
       |> maybe_put_stream(run_opts[:stream])
+      |> maybe_put_functions(run_opts[:functions])
 
     settings = %LlmComposer.Settings{
       providers: [{provider_mod, opts}],
@@ -30,15 +31,7 @@ defmodule Livellm.Chats.LlmRunner do
       track_costs: true
     }
 
-    messages =
-      Enum.map(history, fn msg ->
-        %LlmComposer.Message{
-          type: message_type(msg.role),
-          content: msg.content,
-          reasoning: msg.reasoning,
-          reasoning_details: msg.reasoning_details
-        }
-      end)
+    messages = Enum.map(history, &to_llm_message/1)
 
     LlmComposer.run_completion(settings, messages)
   end
@@ -67,6 +60,22 @@ defmodule Livellm.Chats.LlmRunner do
 
   defp maybe_put_stream(opts, true), do: Keyword.put(opts, :stream_response, true)
   defp maybe_put_stream(opts, _), do: opts
+
+  defp maybe_put_functions(opts, [_ | _] = functions),
+    do: Keyword.put(opts, :functions, functions)
+
+  defp maybe_put_functions(opts, _), do: opts
+
+  defp to_llm_message(%LlmComposer.Message{} = msg), do: msg
+
+  defp to_llm_message(msg) do
+    %LlmComposer.Message{
+      type: message_type(msg.role),
+      content: msg.content,
+      reasoning: msg.reasoning,
+      reasoning_details: msg.reasoning_details
+    }
+  end
 
   defp provider_module("openai"), do: LlmComposer.Providers.OpenAI
   defp provider_module("openai_responses"), do: LlmComposer.Providers.OpenAIResponses

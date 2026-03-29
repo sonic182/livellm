@@ -169,6 +169,15 @@
               density={:compact}
               class="min-h-[2.35rem] pt-1 sm:self-center"
             />
+
+            <.checkbox_input
+              id="memory-tool-toggle"
+              name="use_memory_tool"
+              checked={@use_memory_tool}
+              label="Memory"
+              density={:compact}
+              class="min-h-[2.35rem] pt-1 sm:self-center"
+            />
           </form>
         <% end %>
       </header>
@@ -305,8 +314,8 @@
     const KEY = "livellm:stream_mode"
     export default {
       mounted() {
-        this.handleEvent("save_chat_settings", ({ streaming }) => {
-          localStorage.setItem(KEY, JSON.stringify({ streaming }))
+        this.handleEvent("save_chat_settings", ({ streaming, use_memory_tool }) => {
+          localStorage.setItem(KEY, JSON.stringify({ streaming, use_memory_tool }))
         })
         this.restore()
       },

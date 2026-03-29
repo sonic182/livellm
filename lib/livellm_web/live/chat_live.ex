@@ -8,8 +8,12 @@ defmodule LivellmWeb.ChatLive do
   alias Livellm.Chats
   alias Livellm.Chats.ActiveTasks
   alias Livellm.Config
+  alias Livellm.Memories.Tool, as: MemoriesTool
   alias Livellm.Usage
   alias LlmComposer
+  alias LlmComposer.FunctionCallHelpers
+  alias LlmComposer.FunctionExecutor
+  alias LlmComposer.LlmResponse
 
   require Logger
 
@@ -31,6 +35,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_reasoning_effort, nil)
      |> assign(:waiting, false)
      |> assign(:stream_mode, true)
+     |> assign(:use_memory_tool, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
@@ -123,7 +128,8 @@ defmodule LivellmWeb.ChatLive do
           provider_config: provider_config,
           model: model,
           reasoning_effort: socket.assigns.selected_reasoning_effort,
-          stream_mode: socket.assigns.stream_mode
+          stream_mode: socket.assigns.stream_mode,
+          use_memory_tool: socket.assigns.use_memory_tool
         }
 
         ActiveTasks.mark_active(chat.id)
@@ -172,6 +178,7 @@ defmodule LivellmWeb.ChatLive do
     selected_model = resolve_model(params, socket.assigns, new_provider_id)
     reasoning_effort = parse_effort(params["reasoning_effort"])
     stream_mode = params["streaming"] == "true"
+    use_memory_tool = params["use_memory_tool"] == "true"
 
     socket =
       if socket.assigns.chat do
@@ -193,13 +200,22 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
-     |> push_event("save_chat_settings", %{streaming: stream_mode})}
+     |> assign(:use_memory_tool, use_memory_tool)
+     |> push_event("save_chat_settings", %{
+       streaming: stream_mode,
+       use_memory_tool: use_memory_tool
+     })}
   end
 
   @impl true
   def handle_event("restore_chat_settings", params, socket) do
     stream_mode = Map.get(params, "streaming", true) in [true, "true"]
-    {:noreply, assign(socket, :stream_mode, stream_mode)}
+    use_memory_tool = Map.get(params, "use_memory_tool", false) in [true, "true"]
+
+    {:noreply,
+     socket
+     |> assign(:stream_mode, stream_mode)
+     |> assign(:use_memory_tool, use_memory_tool)}
   end
 
   @impl true
@@ -295,9 +311,8 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp run_llm_task(req, history, chat) do
-    req
-    |> run_llm_request(history, chat.id)
-    |> handle_llm_result(chat, req)
+    functions = if req.use_memory_tool, do: MemoriesTool.definitions(), else: []
+    run_llm_loop(req, history, chat, functions)
   rescue
     error ->
       Logger.error(
@@ -309,18 +324,69 @@ defmodule LivellmWeb.ChatLive do
     ActiveTasks.mark_done(chat.id)
   end
 
-  defp run_llm_request(req, history, chat_id) do
+  defp run_llm_loop(req, history, chat, functions) do
+    req
+    |> run_llm_request(history, chat.id, functions: functions)
+    |> handle_llm_result(chat, req, history, functions)
+  end
+
+  defp run_llm_request(req, history, chat_id, extra_opts) do
+    # Force non-streaming when functions are provided so function_calls surface in response
+    stream =
+      case extra_opts[:functions] do
+        [_ | _] -> false
+        _ -> req.stream_mode
+      end
+
+    opts = [stream: stream] ++ extra_opts
+
     llm_runner().run(
       req.provider_config,
       req.model,
       history,
       req.reasoning_effort,
       chat_id,
-      stream: req.stream_mode
+      opts
     )
   end
 
-  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, req)
+  # Non-streaming response with active functions: check for tool calls and loop
+  defp handle_llm_result(
+         {:ok, %{stream: nil} = llm_response},
+         chat,
+         req,
+         history,
+         [_ | _] = functions
+       ) do
+    case LlmResponse.function_calls(llm_response) do
+      calls when calls not in [nil, []] ->
+        provider_mod = provider_module(req.provider_config.provider)
+
+        executed =
+          Enum.map(calls, fn fc ->
+            {:ok, result} = FunctionExecutor.execute(fc, functions)
+            result
+          end)
+
+        dummy_user = %LlmComposer.Message{type: :user, content: ""}
+
+        asst_msg =
+          FunctionCallHelpers.build_assistant_with_tools(provider_mod, llm_response, dummy_user)
+
+        tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
+
+        run_llm_loop(req, history ++ [asst_msg | tool_msgs], chat, functions)
+
+      _ ->
+        handle_final_llm_result({:ok, llm_response}, chat, req)
+    end
+  end
+
+  defp handle_llm_result(result, chat, req, _history, _functions) do
+    handle_final_llm_result(result, chat, req)
+  end
+
+  defp handle_final_llm_result({:ok, %{stream: stream, provider: provider}}, chat, req)
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
 
@@ -343,7 +409,7 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_llm_result({:ok, llm_response}, chat, _req) do
+  defp handle_final_llm_result({:ok, llm_response}, chat, _req) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
@@ -370,7 +436,7 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_llm_result({:error, reason}, chat, _req) do
+  defp handle_final_llm_result({:error, reason}, chat, _req) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
@@ -476,6 +542,12 @@ defmodule LivellmWeb.ChatLive do
   defp blank_list_to_nil(nil), do: nil
   defp blank_list_to_nil([]), do: nil
   defp blank_list_to_nil(value), do: value
+
+  defp provider_module("openai"), do: LlmComposer.Providers.OpenAI
+  defp provider_module("openai_responses"), do: LlmComposer.Providers.OpenAIResponses
+  defp provider_module("openrouter"), do: LlmComposer.Providers.OpenRouter
+  defp provider_module("ollama"), do: LlmComposer.Providers.Ollama
+  defp provider_module("google"), do: LlmComposer.Providers.Google
 
   defp llm_runner do
     Application.get_env(:livellm, :llm_runner, Livellm.Chats.LlmRunner)
