@@ -2,9 +2,9 @@ defmodule Livellm.Memories.Tool do
   @moduledoc """
   Defines LlmComposer.Function tools for user memories.
 
-  Exposes a single `memory` tool that accepts {action, id?, data?, title?} and
-  dispatches to list/get/search/write/delete operations. Write with an id
-  updates the existing record; write without an id creates a new one.
+  Exposes a single `memory` tool that accepts {action, id?, ids?, data?, title?}
+  and dispatches to list/get/multiget/search/write/delete operations. Write with
+  an id updates the existing record; write without an id creates a new one.
   """
 
   alias Livellm.Memories
@@ -15,21 +15,27 @@ defmodule Livellm.Memories.Tool do
       %LlmComposer.Function{
         name: "memory",
         description:
-          "Manage user memories: list all, get by id, search by text, write (create/update), or delete.",
+          "Manage user memories: list summaries, get one by id, multiget several by ids, search by text, write (create/update), or delete.",
         mf: {__MODULE__, :manage_memory},
         schema: %{
           type: "object",
           properties: %{
             action: %{
               type: "string",
-              enum: ["list", "get", "search", "write", "delete"],
+              enum: ["list", "get", "multiget", "search", "write", "delete"],
               description:
-                "list: all memories; get: one by id; search: by text; write: save new or update existing; delete: remove one by id."
+                "list: all memory ids and titles; get: one by id; multiget: fetch several full memories by ids; search: by text; write: save new or update existing; delete: remove one by id."
             },
             id: %{
               type: ["number", "null"],
               description:
                 "Id of the memory to retrieve (get), update (write), or delete. Omit or null when creating new."
+            },
+            ids: %{
+              type: ["array", "null"],
+              items: %{type: "number"},
+              description:
+                "List of memory ids for multiget. Use this when you need the full content of multiple memories."
             },
             data: %{
               type: ["string", "null"],
@@ -63,6 +69,28 @@ defmodule Livellm.Memories.Tool do
 
   def manage_memory(%{"action" => "get"}) do
     "Error: get requires an integer id field."
+  end
+
+  def manage_memory(%{"action" => "multiget", "ids" => ids}) when is_list(ids) do
+    case normalize_ids(ids) do
+      {:ok, normalized_ids} ->
+        memories = Memories.get_memories(normalized_ids)
+        found_ids = MapSet.new(memories, & &1.id)
+
+        missing_ids =
+          Enum.reject(normalized_ids, fn id ->
+            MapSet.member?(found_ids, id)
+          end)
+
+        format_multiget(memories, missing_ids)
+
+      :error ->
+        "Error: multiget requires an ids field with a non-empty list of integer ids."
+    end
+  end
+
+  def manage_memory(%{"action" => "multiget"}) do
+    "Error: multiget requires an ids field with a non-empty list of integer ids."
   end
 
   def manage_memory(%{"action" => "search", "data" => text}) when is_binary(text) do
@@ -133,5 +161,36 @@ defmodule Livellm.Memories.Tool do
     Enum.map_join(memories, "\n", fn m -> "ID #{m.id} — #{m.title}" end)
   end
 
+  defp format_multiget(memories, missing_ids) do
+    sections =
+      Enum.map(memories, fn memory ->
+        "ID #{memory.id}\nTitle: #{memory.title}\nContent: #{memory.content}"
+      end)
+
+    missing_section =
+      case missing_ids do
+        [] -> []
+        ids -> ["Missing IDs: " <> Enum.map_join(ids, ", ", &to_string/1)]
+      end
+
+    case sections ++ missing_section do
+      [] -> "No memories."
+      parts -> Enum.join(parts, "\n\n")
+    end
+  end
+
   defp format_one(m), do: "Title: #{m.title}\n\nContent: #{m.content}"
+
+  defp normalize_ids(ids) do
+    cond do
+      ids == [] ->
+        :error
+
+      Enum.all?(ids, &is_integer/1) ->
+        {:ok, Enum.uniq(ids)}
+
+      true ->
+        :error
+    end
+  end
 end

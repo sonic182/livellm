@@ -19,6 +19,22 @@ defmodule Livellm.Memories do
   @doc "Gets a single memory by id, returns nil if not found."
   def get_memory(id), do: Repo.get(Memory, id)
 
+  @doc "Gets multiple memories by id, preserving the requested order."
+  def get_memories(ids) when is_list(ids) do
+    memories =
+      Repo.all(
+        from m in Memory,
+          where: m.id in ^ids
+      )
+
+    memories_by_id = Map.new(memories, &{&1.id, &1})
+
+    ids
+    |> Enum.uniq()
+    |> Enum.map(&Map.get(memories_by_id, &1))
+    |> Enum.reject(&is_nil/1)
+  end
+
   @doc "Returns memories whose title or content contains the given text (case-insensitive)."
   def search_memories(text) when is_binary(text) do
     pattern = "%#{String.downcase(text)}%"
