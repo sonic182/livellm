@@ -1,6 +1,10 @@
 defmodule Livellm.Chats.Message.UsageBreakdownEntry do
   @moduledoc """
   Embedded usage and cost data for a single LLM iteration within a chat turn.
+
+  This intentionally mirrors the aggregate usage fields on `Livellm.Chats.Message`.
+  Each entry captures one iteration (`tool_calls` or `final`), while the parent
+  message stores the sum of all entries for the assistant turn.
   """
 
   use Ecto.Schema

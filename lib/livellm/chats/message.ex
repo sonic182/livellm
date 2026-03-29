@@ -1,6 +1,15 @@
 defmodule Livellm.Chats.Message do
   @moduledoc """
   Schema for chat messages.
+
+  Assistant messages persist two usage views on purpose:
+
+  * the top-level usage fields store the aggregate totals for the full assistant turn
+  * `usage_breakdown` stores the per-iteration usage trace that produced those totals
+
+  The field overlap with `UsageBreakdownEntry` is intentional. The aggregate fields make
+  chat-level reads and UI rendering simple, while the embedded breakdown preserves
+  iteration-by-iteration detail for tool-call loops and debugging.
   """
   use Ecto.Schema
 
@@ -59,6 +68,7 @@ defmodule Livellm.Chats.Message do
     field :provider_name, :string
     field :provider_model, :string
     field :provider_response_id, :string
+    # Stores the per-iteration trace; the top-level usage fields remain the turn totals.
     embeds_many :usage_breakdown, UsageBreakdownEntry, on_replace: :delete
     field :tool_calls, {:array, :map}
     belongs_to :chat, Chat
