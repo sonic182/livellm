@@ -37,6 +37,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_reasoning_effort, nil)
      |> assign(:waiting, false)
      |> assign(:stream_mode, true)
+     |> assign(:draft_message, "")
      |> assign(:tool_catalog, tool_catalog)
      |> assign(:enabled_tool_names, [])
      |> assign(:tools_panel_open, false)
@@ -85,6 +86,11 @@ defmodule LivellmWeb.ChatLive do
      |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
      |> stream(:messages, messages, reset: true)}
+  end
+
+  @impl true
+  def handle_event("update_draft", %{"message" => content}, socket) when is_binary(content) do
+    {:noreply, assign(socket, :draft_message, content)}
   end
 
   @impl true
@@ -146,6 +152,7 @@ defmodule LivellmWeb.ChatLive do
          |> assign(:chat, chat)
          |> assign(:current_chat_id, chat.id)
          |> assign(:chats, Chats.list_chats())
+         |> assign(:draft_message, "")
          |> assign(:waiting, true)
          |> stream_insert(:messages, user_msg)
          |> push_patch(to: ~p"/chats/#{chat.id}")}

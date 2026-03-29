@@ -874,6 +874,21 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#messages-1-reasoning details")
   end
 
+  test "draft message survives opening and closing the tools panel", %{conn: conn} do
+    _provider_config = provider_config_fixture(enabled: true)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_change(element(view, "#message-form"), %{"message" => "draft text"})
+
+    render_click(element(view, "#tools-panel-btn"))
+    assert has_element?(view, "#message-input")
+    assert render(view) =~ "draft text"
+
+    render_click(element(view, "#tools-panel-close"))
+    assert has_element?(view, "#message-input")
+    assert render(view) =~ "draft text"
+  end
+
   defp provider_config_fixture(attrs) do
     {:ok, config} =
       attrs

@@ -305,6 +305,7 @@
         <form
           id="message-form"
           phx-submit="send_message"
+          phx-change="update_draft"
           class={[
             "flex items-end gap-3 bg-base-200 border rounded-2xl px-4 py-3 transition-colors duration-150",
             @waiting && "border-base-300 opacity-60",
@@ -319,7 +320,7 @@
             disabled={@waiting}
             class="flex-1 bg-transparent text-sm text-base-content placeholder-base-content/40 resize-none outline-none max-h-40 overflow-y-auto leading-relaxed disabled:cursor-not-allowed"
             phx-hook=".AutoGrow"
-          ></textarea>
+          >{@draft_message}</textarea>
           <button
             type="submit"
             id="send-btn"
