@@ -4,6 +4,8 @@ Livellm is a minimal Phoenix LiveView chat app built as a working reference for 
 
 Upstream library: https://github.com/doofinder/llm_composer
 
+This `master` branch keeps the app focused on the simple chat demo. If you want the more advanced tool-usage showcase, use the `showcase/tool-usage` branch.
+
 ## Screenshots
 
 | New chat | Streaming with reasoning |
