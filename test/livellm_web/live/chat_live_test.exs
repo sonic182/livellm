@@ -545,10 +545,15 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert has_element?(view, "#streaming-message .chat-markdown h1")
     assert has_element?(view, "#streaming-message .chat-markdown code")
+    refute has_element?(view, "#streaming-reasoning details details")
 
     {:ok, assistant_msg} =
       Livellm.Chats.create_message(chat, %{
         role: "assistant",
+        reasoning_steps: [
+          %{"type" => "reasoning", "content" => "Thinking through the answer"},
+          %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"}
+        ],
         content: """
         ## Final answer
 
@@ -565,6 +570,8 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#streaming-message")
     assert has_element?(view, "#messages-1 .chat-markdown h2")
     assert has_element?(view, "#messages-1 .chat-markdown pre code")
+    assert has_element?(view, "#messages-1-reasoning")
+    refute has_element?(view, "#messages-1-reasoning details")
   end
 
   defp provider_config_fixture(attrs) do

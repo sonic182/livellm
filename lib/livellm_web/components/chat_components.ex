@@ -207,21 +207,15 @@ defmodule LivellmWeb.ChatComponents do
           <% end %>
 
           <%= if reasoning_step_type(step) == :reasoning do %>
-            <details class="group rounded-xl border border-base-300 bg-base-100/55 px-3 py-2.5">
-              <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
-                <div class="flex min-w-0 items-center gap-2">
-                  <div class="absolute left-0 top-1 flex size-4 items-center justify-center rounded-full bg-base-300 text-base-content/65">
-                    <.icon name="hero-light-bulb" class="size-2.5" />
-                  </div>
-                  <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-base-content/55">
-                    Reasoning
-                  </span>
+            <div class="rounded-xl border border-base-300 bg-base-100/55 px-3 py-2.5">
+              <div class="flex min-w-0 items-center gap-2">
+                <div class="absolute left-0 top-1 flex size-4 items-center justify-center rounded-full bg-base-300 text-base-content/65">
+                  <.icon name="hero-light-bulb" class="size-2.5" />
                 </div>
-                <.icon
-                  name="hero-chevron-down"
-                  class="size-4 text-base-content/35 transition-transform duration-200 group-open:rotate-180"
-                />
-              </summary>
+                <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-base-content/55">
+                  Reasoning
+                </span>
+              </div>
               <div class="mt-2 whitespace-pre-wrap pl-0 text-sm leading-relaxed text-base-content/80">
                 <%= if reasoning_step_content(step) not in [nil, ""] do %>
                   {reasoning_step_content(step)}
@@ -229,7 +223,7 @@ defmodule LivellmWeb.ChatComponents do
                   <span class="italic text-base-content/45">Working...</span>
                 <% end %>
               </div>
-            </details>
+            </div>
           <% end %>
 
           <%= if reasoning_step_type(step) == :tool_call do %>
