@@ -61,8 +61,16 @@ defmodule Livellm.Memories.Tool do
     end
   end
 
+  def manage_memory(%{"action" => "get"}) do
+    "Error: get requires an integer id field."
+  end
+
   def manage_memory(%{"action" => "search", "data" => text}) when is_binary(text) do
     format_list(Memories.search_memories(text))
+  end
+
+  def manage_memory(%{"action" => "search"}) do
+    "Error: search requires a data field with the search text."
   end
 
   def manage_memory(%{"action" => "write", "id" => id} = args) when is_integer(id) do

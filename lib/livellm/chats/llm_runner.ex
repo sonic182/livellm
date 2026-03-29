@@ -6,6 +6,8 @@ defmodule Livellm.Chats.LlmRunner do
   prompt caching), and dispatches to the appropriate LlmComposer provider.
   """
 
+  alias LlmComposer.FunctionCallExtractors
+
   @spec run(map() | nil, String.t(), [map()], String.t() | nil, integer(), keyword()) ::
           {:ok, map()} | {:error, term()}
 
@@ -34,6 +36,49 @@ defmodule Livellm.Chats.LlmRunner do
     messages = Enum.map(history, &to_llm_message/1)
 
     LlmComposer.run_completion(settings, messages)
+  end
+
+  @doc """
+  Consumes a raw provider stream and returns fully accumulated data including
+  any tool calls reconstructed from delta fragments.
+
+  This is a pure data function — no broadcasting or side effects. Useful for
+  scripts, tests, and background jobs. `chat_live.ex` uses a parallel reduce
+  loop that also broadcasts chunks in real-time.
+
+  Returns a map with:
+    - `:content` — accumulated text
+    - `:reasoning` — accumulated reasoning text
+    - `:reasoning_details` — accumulated reasoning detail fragments
+    - `:final_chunk` — last `:done` or `:usage` chunk (carries token counts)
+    - `:tool_calls` — list of `LlmComposer.FunctionCall` structs, or `nil`
+  """
+  @spec collect_stream(Enumerable.t(), atom(), String.t()) :: %{
+          content: String.t(),
+          reasoning: String.t(),
+          reasoning_details: list(),
+          final_chunk: LlmComposer.StreamChunk.t() | nil,
+          tool_calls: [LlmComposer.FunctionCall.t()] | nil
+        }
+  def collect_stream(stream, provider, model) do
+    initial = %{
+      content: "",
+      reasoning: "",
+      reasoning_details: [],
+      final_chunk: nil,
+      tool_calls_acc: %{}
+    }
+
+    final =
+      stream
+      |> LlmComposer.parse_stream_response(provider, track_costs: true, model: model)
+      |> Enum.reduce(initial, &accumulate_chunk/2)
+
+    tool_calls = build_tool_calls_from_acc(final.tool_calls_acc)
+
+    final
+    |> Map.delete(:tool_calls_acc)
+    |> Map.put(:tool_calls, tool_calls)
   end
 
   @doc false
@@ -139,4 +184,84 @@ defmodule Livellm.Chats.LlmRunner do
   defp message_type("system"), do: :system
   defp message_type("tool"), do: :tool_result
   defp message_type(role) when is_binary(role), do: role
+
+  # --- collect_stream helpers ---
+
+  defp accumulate_chunk(%{type: :text_delta, text: text} = _chunk, acc) when is_binary(text) do
+    %{acc | content: acc.content <> text}
+  end
+
+  defp accumulate_chunk(%{type: :reasoning_delta} = chunk, acc) do
+    reasoning = chunk.reasoning || ""
+    details = chunk.reasoning_details || []
+
+    %{
+      acc
+      | reasoning: acc.reasoning <> reasoning,
+        reasoning_details: acc.reasoning_details ++ details
+    }
+  end
+
+  defp accumulate_chunk(%{type: :tool_call_delta, tool_call: deltas} = _chunk, acc)
+       when is_list(deltas) do
+    %{acc | tool_calls_acc: merge_tool_call_deltas(acc.tool_calls_acc, deltas)}
+  end
+
+  defp accumulate_chunk(%{type: :usage} = chunk, acc) do
+    %{acc | final_chunk: chunk}
+  end
+
+  defp accumulate_chunk(%{type: :done} = chunk, acc) do
+    final_chunk =
+      if not is_nil(chunk.usage) or not is_nil(chunk.cost_info) or is_nil(acc.final_chunk) do
+        chunk
+      else
+        acc.final_chunk
+      end
+
+    %{acc | final_chunk: final_chunk}
+  end
+
+  defp accumulate_chunk(_chunk, acc), do: acc
+
+  defp merge_tool_call_deltas(tool_calls_acc, deltas) do
+    Enum.reduce(deltas, tool_calls_acc, fn delta, acc ->
+      idx = delta["index"]
+
+      if is_nil(idx) do
+        acc
+      else
+        existing = Map.get(acc, idx, %{})
+        args_so_far = get_in(existing, ["function", "arguments"]) || ""
+        new_args = args_so_far <> (get_in(delta, ["function", "arguments"]) || "")
+
+        # Deep-merge the "function" sub-map so the "name" from the first chunk
+        # is not overwritten by later chunks that only carry "arguments".
+        merged_function =
+          Map.merge(
+            Map.get(existing, "function", %{}),
+            Map.get(delta, "function", %{})
+          )
+          |> Map.put("arguments", new_args)
+
+        updated =
+          existing
+          |> Map.merge(delta)
+          |> Map.put("function", merged_function)
+
+        Map.put(acc, idx, updated)
+      end
+    end)
+  end
+
+  defp build_tool_calls_from_acc(tool_calls_acc) when map_size(tool_calls_acc) == 0, do: nil
+
+  defp build_tool_calls_from_acc(tool_calls_acc) do
+    sorted =
+      tool_calls_acc
+      |> Map.values()
+      |> Enum.sort_by(& &1["index"])
+
+    FunctionCallExtractors.from_tool_calls(%{"tool_calls" => sorted})
+  end
 end
