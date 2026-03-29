@@ -68,6 +68,29 @@ defmodule Livellm.Tools.HttpTest do
     assert payload["truncated"]
   end
 
+  test "returns redirect payloads without retrying when location is missing" do
+    bypass = Bypass.open()
+
+    Bypass.expect_once(bypass, "GET", "/redirect", fn conn ->
+      Plug.Conn.resp(conn, 302, "redirect body")
+    end)
+
+    Application.put_env(:livellm, Livellm.Tools.Http,
+      finch_name: Livellm.ToolFinch,
+      connect_timeout: 15_000,
+      receive_timeout: 30_000,
+      max_response_bytes: 200_000,
+      max_redirects: 3,
+      restricted_cidrs: []
+    )
+
+    result = Http.request(%{"url" => "http://localhost:#{bypass.port}/redirect"})
+    payload = Jason.decode!(result)
+
+    assert payload["status"] == 302
+    assert payload["body"] == "redirect body"
+  end
+
   test "blocks requests whose destination matches a restricted cidr" do
     Application.put_env(:livellm, Livellm.Tools.Http,
       finch_name: Livellm.ToolFinch,

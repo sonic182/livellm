@@ -115,6 +115,45 @@ Behavior details:
 - Assistant messages store normalized metadata: provider name, model, token counts, cached tokens, reasoning tokens, cost, and provider response IDs when available.
 - Per-chat UI settings for provider/model/reasoning/streaming are restored from browser `localStorage`.
 
+## Defining New Tools
+
+Tools are defined in `priv/tools/*.md` and loaded through `Livellm.Tools`.
+Each file uses YAML front matter for metadata and a markdown body for the tool description shown to the model and UI.
+
+Required front matter keys:
+
+- `name`
+- `mf.module`
+- `mf.function`
+- `schema`
+
+Rules:
+
+- The Elixir implementation must already exist and export a single-argument function (`/1`).
+- `mf.function` must match an existing exported function on the target module.
+- The markdown body becomes the tool description.
+- After the file is added under `priv/tools`, the tool is available through the registry and appears in the Chat tools panel.
+
+Example:
+
+```md
+---
+name: memory
+mf:
+  module: Livellm.Memories.Tool
+  function: manage_memory
+schema:
+  type: object
+  properties:
+    action:
+      type: string
+  required:
+    - action
+  additionalProperties: false
+---
+Manage user memories from the chat.
+```
+
 ## Current Limitations
 
 Livellm is intentionally minimal and is not a full Open WebUI replacement.

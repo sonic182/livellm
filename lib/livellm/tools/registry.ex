@@ -6,7 +6,7 @@ defmodule Livellm.Tools.Registry do
 
   defmacro __using__(opts) do
     from = Keyword.fetch!(opts, :from)
-    dir = Path.expand(from, File.cwd!())
+    dir = Path.expand(from, Path.dirname(__CALLER__.file))
     definitions = load_definitions!(dir)
     external_resources = Enum.map(definitions, & &1.path)
     catalog = Enum.map(definitions, &catalog_entry/1)

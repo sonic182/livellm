@@ -25,7 +25,7 @@ defmodule Livellm.Tools.Markdown do
 
     mf_attrs = Map.fetch!(attrs, "mf") |> stringify_map_keys()
     module = fetch_module!(mf_attrs, path)
-    function = fetch_function!(mf_attrs, path)
+    function = fetch_function!(mf_attrs, module, path)
     description = String.trim(markdown)
 
     %Definition{
@@ -69,10 +69,37 @@ defmodule Livellm.Tools.Markdown do
     |> Module.concat()
   end
 
-  @spec fetch_function!(map(), String.t()) :: atom()
-  defp fetch_function!(attrs, path) do
-    attrs
-    |> fetch_string!("function", path)
-    |> String.to_atom()
+  @spec fetch_function!(map(), module(), String.t()) :: atom()
+  defp fetch_function!(attrs, module, path) do
+    function_name = fetch_string!(attrs, "function", path)
+
+    case Code.ensure_compiled(module) do
+      {:module, ^module} ->
+        case find_exported_function(module, function_name) do
+          nil ->
+            raise ArgumentError,
+                  "expected mf.function to match an existing #{inspect(module)} export in #{path}"
+
+          function ->
+            function
+        end
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "tool #{path} points to unavailable module #{inspect(module)}: #{inspect(reason)}"
+    end
+  end
+
+  @spec find_exported_function(module(), String.t()) :: atom() | nil
+  defp find_exported_function(module, function_name) do
+    Enum.find_value(module.__info__(:functions), fn
+      {function, 1} ->
+        if Atom.to_string(function) == function_name do
+          function
+        end
+
+      _other ->
+        nil
+    end)
   end
 end

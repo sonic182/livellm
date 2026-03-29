@@ -92,20 +92,25 @@ defmodule Livellm.Tools.Http do
           non_neg_integer()
         ) :: {:ok, map()} | {:error, String.t()}
   defp follow_redirect(response, request_data, redirects_left) do
-    with {:ok, next_url} <- redirect_url(response, request_data.url),
-         :ok <- validate_redirect_limit(next_url, request_data.url, redirects_left) do
-      request_data
-      |> Map.put(:url, next_url)
-      |> apply_redirect_method(response.status)
-      |> follow_request(redirects_left - 1)
+    case redirect_url(response, request_data.url) do
+      :no_location ->
+        {:ok, build_response_payload(response, request_data.url)}
+
+      {:ok, next_url} ->
+        with :ok <- validate_redirect_limit(next_url, request_data.url, redirects_left) do
+          request_data
+          |> Map.put(:url, next_url)
+          |> apply_redirect_method(response.status)
+          |> follow_request(redirects_left - 1)
+        end
     end
   end
 
-  @spec redirect_url(Finch.Response.t(), String.t()) :: {:ok, String.t()}
+  @spec redirect_url(Finch.Response.t(), String.t()) :: {:ok, String.t()} | :no_location
   defp redirect_url(response, current_url) do
     case find_header(response.headers, "location") do
       nil ->
-        {:ok, current_url}
+        :no_location
 
       location ->
         {:ok, URI.merge(current_url, location) |> to_string()}
