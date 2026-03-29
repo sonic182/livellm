@@ -259,6 +259,20 @@
                   </div>
                 </div>
               </div>
+            <% not is_nil(@tool_call_status) -> %>
+              <div id="tool-call-indicator" class="flex gap-3 px-6 py-3">
+                <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-emerald-600 text-white mt-0.5">
+                  <.icon name="hero-wrench-screwdriver" class="size-4" />
+                </div>
+                <div class="bg-base-200 text-base-content rounded-2xl rounded-tl-sm px-4 py-3 text-sm flex items-center gap-2">
+                  <span class="text-[11px] font-semibold uppercase tracking-[0.18em]">
+                    Calling
+                  </span>
+                  <code class="font-mono text-xs">{@tool_call_status}</code>
+                  <span class="inline-block h-4 w-0.5 animate-pulse bg-base-content/40 ml-1">
+                  </span>
+                </div>
+              </div>
             <% @waiting -> %>
               <div id="thinking-indicator" class="flex gap-3 px-6 py-3">
                 <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">

@@ -39,6 +39,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:tools_panel_open, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
+     |> assign(:tool_call_status, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [])}
   end
@@ -242,6 +243,7 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
+     |> assign(:tool_call_status, nil)
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -255,8 +257,17 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
+     |> assign(:tool_call_status, nil)
      |> put_flash(:error, "LLM error: #{inspect(reason)}")
      |> push_event("focus_input", %{})}
+  end
+
+  @impl true
+  def handle_info({:tool_call_start, _chat, tool_name}, socket) do
+    {:noreply,
+     socket
+     |> assign(:tool_call_status, tool_name)
+     |> assign(:streaming_content, nil)}
   end
 
   @impl true
@@ -276,6 +287,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
+     |> assign(:tool_call_status, nil)
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -291,6 +303,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
+     |> assign(:tool_call_status, nil)
      |> put_flash(:error, "Stream completed but failed to save response.")
      |> push_event("focus_input", %{})}
   end
@@ -345,18 +358,18 @@ defmodule LivellmWeb.ChatLive do
 
   @max_tool_iterations 10
 
-  defp run_llm_loop(req, history, chat, functions, iteration \\ 0)
+  defp run_llm_loop(req, history, chat, functions, iteration \\ 0, tool_calls_history \\ [])
 
-  defp run_llm_loop(req, _history, chat, _functions, iteration)
+  defp run_llm_loop(req, _history, chat, _functions, iteration, _tool_calls_history)
        when iteration >= @max_tool_iterations do
     Logger.error("[chat_live] tool loop limit reached chat_id=#{chat.id} iteration=#{iteration}")
     handle_final_llm_result({:error, :tool_loop_limit}, chat, req)
   end
 
-  defp run_llm_loop(req, history, chat, functions, iteration) do
+  defp run_llm_loop(req, history, chat, functions, iteration, tool_calls_history) do
     req
     |> run_llm_request(history, chat.id, functions: functions)
-    |> handle_llm_result(chat, req, history, functions, iteration)
+    |> handle_llm_result(chat, req, history, functions, iteration, tool_calls_history)
   end
 
   defp run_llm_request(req, history, chat_id, extra_opts) do
@@ -379,7 +392,8 @@ defmodule LivellmWeb.ChatLive do
          req,
          history,
          [_ | _] = functions,
-         iteration
+         iteration,
+         tool_calls_history
        ) do
     case LlmResponse.function_calls(llm_response) do
       calls when calls not in [nil, []] ->
@@ -391,6 +405,7 @@ defmodule LivellmWeb.ChatLive do
 
         executed =
           Enum.map(calls, fn fc ->
+            broadcast(chat.id, {:tool_call_start, chat, fc.name})
             {:ok, result} = FunctionExecutor.execute(fc, functions)
 
             Logger.debug(
@@ -406,11 +421,19 @@ defmodule LivellmWeb.ChatLive do
           FunctionCallHelpers.build_assistant_with_tools(provider_mod, llm_response, dummy_user)
 
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
+        new_tool_calls = Enum.map(executed, &tool_call_entry/1)
 
-        run_llm_loop(req, history ++ [asst_msg | tool_msgs], chat, functions, iteration + 1)
+        run_llm_loop(
+          req,
+          history ++ [asst_msg | tool_msgs],
+          chat,
+          functions,
+          iteration + 1,
+          tool_calls_history ++ new_tool_calls
+        )
 
       _ ->
-        handle_final_llm_result({:ok, llm_response}, chat, req)
+        handle_final_llm_result({:ok, llm_response}, chat, req, tool_calls_history)
     end
   end
 
@@ -421,7 +444,8 @@ defmodule LivellmWeb.ChatLive do
          req,
          history,
          [_ | _] = functions,
-         iteration
+         iteration,
+         tool_calls_history
        )
        when not is_nil(stream) do
     Logger.debug(
@@ -442,6 +466,7 @@ defmodule LivellmWeb.ChatLive do
 
         executed =
           Enum.map(calls, fn fc ->
+            broadcast(chat.id, {:tool_call_start, chat, fc.name})
             {:ok, result} = FunctionExecutor.execute(fc, functions)
 
             Logger.debug(
@@ -458,18 +483,34 @@ defmodule LivellmWeb.ChatLive do
         }
 
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
-        run_llm_loop(req, history ++ [asst_msg | tool_msgs], chat, functions, iteration + 1)
+        new_tool_calls = Enum.map(executed, &tool_call_entry/1)
+
+        run_llm_loop(
+          req,
+          history ++ [asst_msg | tool_msgs],
+          chat,
+          functions,
+          iteration + 1,
+          tool_calls_history ++ new_tool_calls
+        )
 
       _ ->
-        save_stream_result(final, chat)
+        save_stream_result(final, chat, tool_calls_history)
     end
   end
 
-  defp handle_llm_result(result, chat, req, _history, _functions, _iteration) do
-    handle_final_llm_result(result, chat, req)
+  defp handle_llm_result(result, chat, req, _history, _functions, _iteration, tool_calls_history) do
+    handle_final_llm_result(result, chat, req, tool_calls_history)
   end
 
-  defp handle_final_llm_result({:ok, %{stream: stream, provider: provider}}, chat, req)
+  defp handle_final_llm_result(result, chat, req, tool_calls_history \\ [])
+
+  defp handle_final_llm_result(
+         {:ok, %{stream: stream, provider: provider}},
+         chat,
+         req,
+         tool_calls_history
+       )
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
 
@@ -479,10 +520,10 @@ defmodule LivellmWeb.ChatLive do
       "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
     )
 
-    save_stream_result(final, chat)
+    save_stream_result(final, chat, tool_calls_history)
   end
 
-  defp handle_final_llm_result({:ok, llm_response}, chat, _req) do
+  defp handle_final_llm_result({:ok, llm_response}, chat, _req, tool_calls_history) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
 
@@ -492,7 +533,8 @@ defmodule LivellmWeb.ChatLive do
         content: content,
         reasoning: reasoning,
         reasoning_details: reasoning_details,
-        raw_response: llm_response.raw
+        raw_response: llm_response.raw,
+        tool_calls: blank_list_to_nil(tool_calls_history)
       }
       |> Map.merge(Usage.cost_tracking_attrs(llm_response))
 
@@ -509,12 +551,12 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_final_llm_result({:error, reason}, chat, _req) do
+  defp handle_final_llm_result({:error, reason}, chat, _req, _tool_calls_history) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp save_stream_result(final, chat) do
-    case Chats.create_message(chat, build_stream_message_attrs(final)) do
+  defp save_stream_result(final, chat, tool_calls_history) do
+    case Chats.create_message(chat, build_stream_message_attrs(final, tool_calls_history)) do
       {:ok, assistant_msg} ->
         broadcast(chat.id, {:stream_done, chat, assistant_msg})
 
@@ -613,13 +655,14 @@ defmodule LivellmWeb.ChatLive do
     acc
   end
 
-  defp build_stream_message_attrs(final) do
+  defp build_stream_message_attrs(final, tool_calls_history) do
     %{
       role: "assistant",
       content: final.content,
       reasoning: blank_to_nil(final.reasoning),
       reasoning_details: blank_list_to_nil(final.reasoning_details),
-      raw_response: final.final_chunk && final.final_chunk.raw
+      raw_response: final.final_chunk && final.final_chunk.raw,
+      tool_calls: blank_list_to_nil(tool_calls_history)
     }
     |> Map.merge(Usage.stream_chunk_attrs(final.final_chunk))
   end
@@ -672,6 +715,10 @@ defmodule LivellmWeb.ChatLive do
       |> Enum.sort_by(& &1["index"])
 
     FunctionCallExtractors.from_tool_calls(%{"tool_calls" => sorted})
+  end
+
+  defp tool_call_entry(%{name: name, arguments: arguments, result: result}) do
+    %{"name" => name, "arguments" => arguments, "result" => to_string(result)}
   end
 
   defp blank_to_nil(nil), do: nil

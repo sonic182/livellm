@@ -163,6 +163,29 @@ defmodule LivellmWeb.ChatComponents do
           </details>
         <% end %>
 
+        <%= if @message.role == "assistant" and
+              is_list(Map.get(@message, :tool_calls)) and
+              @message.tool_calls != [] do %>
+          <details
+            id={"#{@id}-tool-calls"}
+            class="chat-reasoning rounded-2xl rounded-tl-sm border px-4 py-3 text-sm"
+          >
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
+              <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
+                Tools used
+              </span>
+              <span class="chat-reasoning rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                {length(@message.tool_calls)}
+              </span>
+            </summary>
+            <ul class="mt-3 space-y-1">
+              <%= for tc <- @message.tool_calls do %>
+                <li class="text-xs font-mono">{tc["name"]}</li>
+              <% end %>
+            </ul>
+          </details>
+        <% end %>
+
         <div class={[
           "rounded-2xl text-sm",
           @message.role == "assistant" &&

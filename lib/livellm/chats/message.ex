@@ -23,6 +23,7 @@ defmodule Livellm.Chats.Message do
     field :provider_name, :string
     field :provider_model, :string
     field :provider_response_id, :string
+    field :tool_calls, {:array, :map}
     belongs_to :chat, Chat
 
     timestamps(type: :utc_datetime)
@@ -46,7 +47,8 @@ defmodule Livellm.Chats.Message do
     :cost_currency,
     :provider_name,
     :provider_model,
-    :provider_response_id
+    :provider_response_id,
+    :tool_calls
   ]
 
   @doc false
