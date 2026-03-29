@@ -27,13 +27,13 @@ defmodule Livellm.Memories.Tool do
                 "list: all memory ids and titles; get: one by id; multiget: fetch several full memories by ids; search: by text; write: save new or update existing; delete: remove one by id."
             },
             id: %{
-              type: ["number", "null"],
+              type: ["integer", "null"],
               description:
                 "Id of the memory to retrieve (get), update (write), or delete. Omit or null when creating new."
             },
             ids: %{
               type: ["array", "null"],
-              items: %{type: "number"},
+              items: %{type: "integer"},
               description:
                 "List of memory ids for multiget. Use this when you need the full content of multiple memories."
             },

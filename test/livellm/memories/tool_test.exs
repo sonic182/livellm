@@ -16,8 +16,9 @@ defmodule Livellm.Memories.ToolTest do
              "delete"
            ]
 
+    assert get_in(definition.schema, [:properties, :id, :type]) == ["integer", "null"]
     assert get_in(definition.schema, [:properties, :ids, :type]) == ["array", "null"]
-    assert get_in(definition.schema, [:properties, :ids, :items, :type]) == "number"
+    assert get_in(definition.schema, [:properties, :ids, :items, :type]) == "integer"
   end
 
   test "delete removes an existing memory" do

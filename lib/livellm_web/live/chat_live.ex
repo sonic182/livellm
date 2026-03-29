@@ -38,10 +38,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:stream_mode, true)
      |> assign(:use_memory_tool, false)
      |> assign(:tools_panel_open, false)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
-     |> assign(:reasoning_steps, [])
-     |> assign(:tool_call_status, nil)
+     |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [])}
   end
@@ -56,9 +53,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:chat, nil)
      |> assign(:current_chat_id, nil)
      |> assign(:subscribed_chat_id, nil)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
-     |> assign(:reasoning_steps, [])
+     |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [], reset: true)}
   end
@@ -85,8 +80,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, chat.model)
      |> assign(:selected_reasoning_effort, chat.reasoning_effort)
      |> assign(:waiting, waiting)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
+     |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
      |> stream(:messages, messages, reset: true)}
   end
@@ -246,10 +240,7 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
-     |> assign(:tool_call_status, nil)
-     |> assign(:reasoning_steps, [])
+     |> clear_transient_trace()
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -263,8 +254,7 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> assign(:tool_call_status, nil)
-     |> assign(:reasoning_steps, [])
+     |> clear_transient_trace()
      |> put_flash(:error, "LLM error: #{inspect(reason)}")
      |> push_event("focus_input", %{})}
   end
@@ -275,25 +265,18 @@ defmodule LivellmWeb.ChatLive do
 
     {:noreply,
      socket
-     |> assign(:tool_call_status, tool_name)
      |> assign(:streaming_content, nil)
      |> assign(:reasoning_steps, socket.assigns.reasoning_steps ++ [new_step])}
   end
 
   @impl true
   def handle_info({:tool_call_end, _chat, tool_name}, socket) do
-    steps = socket.assigns.reasoning_steps
-
-    updated_steps =
-      Enum.map(steps, fn step ->
-        if step.type == :tool_call && step.tool_name == tool_name do
-          ReasoningStep.update_status(step, :completed)
-        else
-          step
-        end
-      end)
-
-    {:noreply, assign(socket, :reasoning_steps, updated_steps)}
+    {:noreply,
+     assign(
+       socket,
+       :reasoning_steps,
+       complete_latest_running_tool_step(socket.assigns.reasoning_steps, tool_name)
+     )}
   end
 
   @impl true
@@ -325,10 +308,7 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
-     |> assign(:tool_call_status, nil)
-     |> assign(:reasoning_steps, [])
+     |> clear_transient_trace()
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -342,15 +322,36 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> assign(:streaming_content, nil)
-     |> assign(:streaming_reasoning, nil)
-     |> assign(:tool_call_status, nil)
-     |> assign(:reasoning_steps, [])
+     |> clear_transient_trace()
      |> put_flash(:error, "Stream completed but failed to save response.")
      |> push_event("focus_input", %{})}
   end
 
   # --- Private ---
+
+  defp clear_transient_trace(socket) do
+    socket
+    |> assign(:streaming_content, nil)
+    |> assign(:streaming_reasoning, nil)
+    |> assign(:reasoning_steps, [])
+  end
+
+  defp complete_latest_running_tool_step(steps, tool_name) do
+    steps
+    |> Enum.reverse()
+    |> complete_running_tool_step(tool_name)
+    |> Enum.reverse()
+  end
+
+  defp complete_running_tool_step([], _tool_name), do: []
+
+  defp complete_running_tool_step([step | rest], tool_name) do
+    if step.type == :tool_call and step.tool_name == tool_name and step.status == :running do
+      [ReasoningStep.update_status(step, :completed) | rest]
+    else
+      [step | complete_running_tool_step(rest, tool_name)]
+    end
+  end
 
   defp stream_topic(chat_id), do: "chat_stream:#{chat_id}"
 

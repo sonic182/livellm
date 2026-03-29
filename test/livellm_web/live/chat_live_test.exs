@@ -447,6 +447,42 @@ defmodule LivellmWeb.ChatLiveTest do
            ]
   end
 
+  test "tool_call_end completes only the latest running step for the same tool", %{conn: conn} do
+    chat = ChatsFixtures.chat_fixture()
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    send(view.pid, {:tool_call_start, chat, "memory"})
+    send(view.pid, {:tool_call_start, chat, "memory"})
+    send(view.pid, {:tool_call_end, chat, "memory"})
+
+    _ = :sys.get_state(view.pid)
+
+    html = render(view)
+
+    assert count_occurrences(html, ~r/\bCalling\b/) == 1
+    assert count_occurrences(html, ~r/\bUsed tool\b/) == 1
+    assert count_occurrences(html, ~r/\bdone\b/) == 1
+  end
+
+  test "navigating to another chat clears transient trace state", %{conn: conn} do
+    first_chat = ChatsFixtures.chat_fixture(%{title: "First chat"})
+    second_chat = ChatsFixtures.chat_fixture(%{title: "Second chat"})
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{first_chat.id}")
+
+    send(view.pid, {:stream_reasoning, first_chat, "Thinking..."})
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#streaming-message")
+
+    render_patch(view, ~p"/chats/#{second_chat.id}")
+
+    _ = :sys.get_state(view.pid)
+
+    refute has_element?(view, "#streaming-message")
+  end
+
   test "sending a follow-up openai responses message reuses previous_response_id across alias and snapshot models",
        %{conn: conn} do
     provider_config =
@@ -544,6 +580,10 @@ defmodule LivellmWeb.ChatLiveTest do
       |> Config.create_provider_config()
 
     config
+  end
+
+  defp count_occurrences(content, needle) do
+    Regex.scan(needle, content) |> length()
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:livellm, key)
