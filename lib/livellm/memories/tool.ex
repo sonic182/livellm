@@ -3,8 +3,8 @@ defmodule Livellm.Memories.Tool do
   Defines LlmComposer.Function tools for user memories.
 
   Exposes a single `memory` tool that accepts {action, id?, data?, title?} and
-  dispatches to list/get/search/write operations. Write with an id updates the
-  existing record; write without an id creates a new one.
+  dispatches to list/get/search/write/delete operations. Write with an id
+  updates the existing record; write without an id creates a new one.
   """
 
   alias Livellm.Memories
@@ -15,21 +15,21 @@ defmodule Livellm.Memories.Tool do
       %LlmComposer.Function{
         name: "memory",
         description:
-          "Manage user memories: list all, get by id, search by text, or write (create/update).",
+          "Manage user memories: list all, get by id, search by text, write (create/update), or delete.",
         mf: {__MODULE__, :manage_memory},
         schema: %{
           type: "object",
           properties: %{
             action: %{
               type: "string",
-              enum: ["list", "get", "search", "write"],
+              enum: ["list", "get", "search", "write", "delete"],
               description:
-                "list: all memories; get: one by id; search: by text; write: save new or update existing."
+                "list: all memories; get: one by id; search: by text; write: save new or update existing; delete: remove one by id."
             },
             id: %{
               type: ["number", "null"],
               description:
-                "Id of the memory to retrieve (get) or update (write). Omit or null when creating new."
+                "Id of the memory to retrieve (get), update (write), or delete. Omit or null when creating new."
             },
             data: %{
               type: ["string", "null"],
@@ -101,6 +101,23 @@ defmodule Livellm.Memories.Tool do
 
   def manage_memory(%{"action" => "write"}) do
     "Error: write requires data (content) and title to create, or id to update."
+  end
+
+  def manage_memory(%{"action" => "delete", "id" => id}) when is_integer(id) do
+    case Memories.get_memory(id) do
+      nil ->
+        "Not found."
+
+      memory ->
+        case Memories.delete_memory(memory) do
+          {:ok, deleted} -> "Deleted memory ID #{deleted.id}."
+          {:error, _} -> "Error: could not delete memory."
+        end
+    end
+  end
+
+  def manage_memory(%{"action" => "delete"}) do
+    "Error: delete requires an integer id field."
   end
 
   def manage_memory(_args) do
