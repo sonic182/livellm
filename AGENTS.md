@@ -3,7 +3,6 @@ This is a web application written using the Phoenix web framework.
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
-- Use `:req` (`Req`) for HTTP requests — **avoid** `:httpoison`, `:tesla`, and `:httpc`
 
 ## Phoenix v1.8
 

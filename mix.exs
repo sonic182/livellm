@@ -56,6 +56,7 @@ defmodule Livellm.MixProject do
        app: false,
        compile: false,
        depth: 1},
+      {:inet_cidr, "~> 1.0.0"},
       {:jason, "~> 1.2"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:llm_composer, "~> 0.18.0"},
@@ -71,7 +72,9 @@ defmodule Livellm.MixProject do
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
-      {:tidewave, "~> 0.5", only: :dev}
+      {:tidewave, "~> 0.5", only: :dev},
+      {:yaml_elixir, "~> 2.12"},
+      {:bypass, "~> 2.1", only: :test}
     ]
   end
 

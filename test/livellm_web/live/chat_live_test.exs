@@ -688,7 +688,7 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(
              view,
              "#tool-memory",
-             "read, save, update, and delete your saved memories"
+             "Manage user memories"
            )
 
     render_change(element(view, "#chat-settings-form"), %{
@@ -872,6 +872,21 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(view, "#messages-1 .chat-markdown pre code")
     assert has_element?(view, "#messages-1-reasoning")
     refute has_element?(view, "#messages-1-reasoning details")
+  end
+
+  test "draft message survives opening and closing the tools panel", %{conn: conn} do
+    _provider_config = provider_config_fixture(enabled: true)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_change(element(view, "#message-form"), %{"message" => "draft text"})
+
+    render_click(element(view, "#tools-panel-btn"))
+    assert has_element?(view, "#message-input")
+    assert render(view) =~ "draft text"
+
+    render_click(element(view, "#tools-panel-close"))
+    assert has_element?(view, "#message-input")
+    assert render(view) =~ "draft text"
   end
 
   defp provider_config_fixture(attrs) do

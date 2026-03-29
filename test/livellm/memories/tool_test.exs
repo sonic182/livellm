@@ -3,11 +3,12 @@ defmodule Livellm.Memories.ToolTest do
 
   alias Livellm.Memories
   alias Livellm.Memories.Tool
+  alias Livellm.Tools
 
-  test "definitions include multiget and delete in the action enum" do
-    [definition] = Tool.definitions()
+  test "memory descriptor includes multiget and delete in the action enum" do
+    definition = Enum.find(Tools.definitions(), &(&1.name == "memory"))
 
-    assert get_in(definition.schema, [:properties, :action, :enum]) == [
+    assert get_in(definition.schema, ["properties", "action", "enum"]) == [
              "list",
              "get",
              "multiget",
@@ -16,10 +17,10 @@ defmodule Livellm.Memories.ToolTest do
              "delete"
            ]
 
-    assert definition.schema.required == ["action", "id", "ids", "data", "title"]
-    assert get_in(definition.schema, [:properties, :id, :type]) == ["integer", "null"]
-    assert get_in(definition.schema, [:properties, :ids, :type]) == ["array", "null"]
-    assert get_in(definition.schema, [:properties, :ids, :items, :type]) == "integer"
+    assert definition.schema["required"] == ["action", "id", "ids", "data", "title"]
+    assert get_in(definition.schema, ["properties", "id", "type"]) == ["integer", "null"]
+    assert get_in(definition.schema, ["properties", "ids", "type"]) == ["array", "null"]
+    assert get_in(definition.schema, ["properties", "ids", "items", "type"]) == "integer"
   end
 
   test "delete removes an existing memory" do
