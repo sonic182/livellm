@@ -7,6 +7,7 @@ defmodule LivellmWeb.ChatLive do
 
   alias Livellm.Chats
   alias Livellm.Chats.ActiveTasks
+  alias Livellm.Chats.Message.ReasoningStep
   alias Livellm.Config
   alias Livellm.Memories.Tool, as: MemoriesTool
   alias Livellm.Usage
@@ -39,6 +40,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:tools_panel_open, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
+     |> assign(:reasoning_steps, [])
      |> assign(:tool_call_status, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [])}
@@ -56,6 +58,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:subscribed_chat_id, nil)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
+     |> assign(:reasoning_steps, [])
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
      |> stream(:messages, [], reset: true)}
   end
@@ -243,7 +246,10 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
+     |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> assign(:tool_call_status, nil)
+     |> assign(:reasoning_steps, [])
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -258,16 +264,36 @@ defmodule LivellmWeb.ChatLive do
      socket
      |> assign(:waiting, false)
      |> assign(:tool_call_status, nil)
+     |> assign(:reasoning_steps, [])
      |> put_flash(:error, "LLM error: #{inspect(reason)}")
      |> push_event("focus_input", %{})}
   end
 
   @impl true
   def handle_info({:tool_call_start, _chat, tool_name}, socket) do
+    new_step = ReasoningStep.tool_call(tool_name, :running)
+
     {:noreply,
      socket
      |> assign(:tool_call_status, tool_name)
-     |> assign(:streaming_content, nil)}
+     |> assign(:streaming_content, nil)
+     |> assign(:reasoning_steps, socket.assigns.reasoning_steps ++ [new_step])}
+  end
+
+  @impl true
+  def handle_info({:tool_call_end, _chat, tool_name}, socket) do
+    steps = socket.assigns.reasoning_steps
+
+    updated_steps =
+      Enum.map(steps, fn step ->
+        if step.type == :tool_call && step.tool_name == tool_name do
+          ReasoningStep.update_status(step, :completed)
+        else
+          step
+        end
+      end)
+
+    {:noreply, assign(socket, :reasoning_steps, updated_steps)}
   end
 
   @impl true
@@ -277,7 +303,21 @@ defmodule LivellmWeb.ChatLive do
 
   @impl true
   def handle_info({:stream_reasoning, _chat, reasoning}, socket) do
-    {:noreply, assign(socket, :streaming_reasoning, reasoning)}
+    steps = socket.assigns.reasoning_steps
+
+    updated_steps =
+      case List.last(steps) do
+        %{type: :reasoning, content: _} = last_step ->
+          List.replace_at(steps, -1, %{last_step | content: reasoning})
+
+        _ ->
+          steps ++ [ReasoningStep.reasoning(reasoning)]
+      end
+
+    {:noreply,
+     socket
+     |> assign(:streaming_reasoning, reasoning)
+     |> assign(:reasoning_steps, updated_steps)}
   end
 
   @impl true
@@ -288,6 +328,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:tool_call_status, nil)
+     |> assign(:reasoning_steps, [])
      |> assign(
        :chat_metrics,
        Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
@@ -304,6 +345,7 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:tool_call_status, nil)
+     |> assign(:reasoning_steps, [])
      |> put_flash(:error, "Stream completed but failed to save response.")
      |> push_event("focus_input", %{})}
   end
@@ -358,18 +400,42 @@ defmodule LivellmWeb.ChatLive do
 
   @max_tool_iterations 10
 
-  defp run_llm_loop(req, history, chat, functions, iteration \\ 0, tool_calls_history \\ [])
+  defp run_llm_loop(
+         req,
+         history,
+         chat,
+         functions,
+         iteration \\ 0,
+         tool_calls_history \\ [],
+         reasoning_steps \\ []
+       )
 
-  defp run_llm_loop(req, _history, chat, _functions, iteration, _tool_calls_history)
+  defp run_llm_loop(
+         req,
+         _history,
+         chat,
+         _functions,
+         iteration,
+         _tool_calls_history,
+         _reasoning_steps
+       )
        when iteration >= @max_tool_iterations do
     Logger.error("[chat_live] tool loop limit reached chat_id=#{chat.id} iteration=#{iteration}")
     handle_final_llm_result({:error, :tool_loop_limit}, chat, req)
   end
 
-  defp run_llm_loop(req, history, chat, functions, iteration, tool_calls_history) do
+  defp run_llm_loop(req, history, chat, functions, iteration, tool_calls_history, reasoning_steps) do
     req
     |> run_llm_request(history, chat.id, functions: functions)
-    |> handle_llm_result(chat, req, history, functions, iteration, tool_calls_history)
+    |> handle_llm_result(
+      chat,
+      req,
+      history,
+      functions,
+      iteration,
+      tool_calls_history,
+      reasoning_steps
+    )
   end
 
   defp run_llm_request(req, history, chat_id, extra_opts) do
@@ -393,7 +459,8 @@ defmodule LivellmWeb.ChatLive do
          history,
          [_ | _] = functions,
          iteration,
-         tool_calls_history
+         tool_calls_history,
+         reasoning_steps
        ) do
     case LlmResponse.function_calls(llm_response) do
       calls when calls not in [nil, []] ->
@@ -412,6 +479,7 @@ defmodule LivellmWeb.ChatLive do
               "[chat_live] tool_result chat_id=#{chat.id} name=#{fc.name} result=#{inspect(result.result)}"
             )
 
+            broadcast(chat.id, {:tool_call_end, chat, fc.name})
             result
           end)
 
@@ -423,17 +491,28 @@ defmodule LivellmWeb.ChatLive do
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
 
+        next_reasoning_steps =
+          reasoning_steps ++
+            build_reasoning_steps(llm_response.main_response.reasoning, new_tool_calls)
+
         run_llm_loop(
           req,
           history ++ [asst_msg | tool_msgs],
           chat,
           functions,
           iteration + 1,
-          tool_calls_history ++ new_tool_calls
+          tool_calls_history ++ new_tool_calls,
+          next_reasoning_steps
         )
 
       _ ->
-        handle_final_llm_result({:ok, llm_response}, chat, req, tool_calls_history)
+        handle_final_llm_result(
+          {:ok, llm_response},
+          chat,
+          req,
+          tool_calls_history,
+          reasoning_steps
+        )
     end
   end
 
@@ -445,7 +524,8 @@ defmodule LivellmWeb.ChatLive do
          history,
          [_ | _] = functions,
          iteration,
-         tool_calls_history
+         tool_calls_history,
+         reasoning_steps
        )
        when not is_nil(stream) do
     Logger.debug(
@@ -485,31 +565,45 @@ defmodule LivellmWeb.ChatLive do
         tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
         new_tool_calls = Enum.map(executed, &tool_call_entry/1)
 
+        next_reasoning_steps =
+          reasoning_steps ++ build_reasoning_steps(final.reasoning, new_tool_calls)
+
         run_llm_loop(
           req,
           history ++ [asst_msg | tool_msgs],
           chat,
           functions,
           iteration + 1,
-          tool_calls_history ++ new_tool_calls
+          tool_calls_history ++ new_tool_calls,
+          next_reasoning_steps
         )
 
       _ ->
-        save_stream_result(final, chat, tool_calls_history)
+        save_stream_result(final, chat, tool_calls_history, reasoning_steps)
     end
   end
 
-  defp handle_llm_result(result, chat, req, _history, _functions, _iteration, tool_calls_history) do
-    handle_final_llm_result(result, chat, req, tool_calls_history)
+  defp handle_llm_result(
+         result,
+         chat,
+         req,
+         _history,
+         _functions,
+         _iteration,
+         tool_calls_history,
+         reasoning_steps
+       ) do
+    handle_final_llm_result(result, chat, req, tool_calls_history, reasoning_steps)
   end
 
-  defp handle_final_llm_result(result, chat, req, tool_calls_history \\ [])
+  defp handle_final_llm_result(result, chat, req, tool_calls_history \\ [], reasoning_steps \\ [])
 
   defp handle_final_llm_result(
          {:ok, %{stream: stream, provider: provider}},
          chat,
          req,
-         tool_calls_history
+         tool_calls_history,
+         reasoning_steps
        )
        when not is_nil(stream) do
     Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
@@ -520,18 +614,27 @@ defmodule LivellmWeb.ChatLive do
       "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
     )
 
-    save_stream_result(final, chat, tool_calls_history)
+    save_stream_result(final, chat, tool_calls_history, reasoning_steps)
   end
 
-  defp handle_final_llm_result({:ok, llm_response}, chat, _req, tool_calls_history) do
+  defp handle_final_llm_result(
+         {:ok, llm_response},
+         chat,
+         _req,
+         tool_calls_history,
+         reasoning_steps
+       ) do
     %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
       llm_response.main_response
+
+    all_reasoning_steps = reasoning_steps ++ build_reasoning_steps(reasoning, [])
 
     attrs =
       %{
         role: "assistant",
         content: content,
         reasoning: reasoning,
+        reasoning_steps: all_reasoning_steps,
         reasoning_details: reasoning_details,
         raw_response: llm_response.raw,
         tool_calls: blank_list_to_nil(tool_calls_history)
@@ -551,12 +654,21 @@ defmodule LivellmWeb.ChatLive do
     end
   end
 
-  defp handle_final_llm_result({:error, reason}, chat, _req, _tool_calls_history) do
+  defp handle_final_llm_result(
+         {:error, reason},
+         chat,
+         _req,
+         _tool_calls_history,
+         _reasoning_steps
+       ) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp save_stream_result(final, chat, tool_calls_history) do
-    case Chats.create_message(chat, build_stream_message_attrs(final, tool_calls_history)) do
+  defp save_stream_result(final, chat, tool_calls_history, reasoning_steps) do
+    case Chats.create_message(
+           chat,
+           build_stream_message_attrs(final, tool_calls_history, reasoning_steps)
+         ) do
       {:ok, assistant_msg} ->
         broadcast(chat.id, {:stream_done, chat, assistant_msg})
 
@@ -576,6 +688,7 @@ defmodule LivellmWeb.ChatLive do
       reasoning_details: [],
       final_chunk: nil,
       tool_calls_acc: %{},
+      reasoning_steps: [],
       chat: chat
     }
 
@@ -655,11 +768,14 @@ defmodule LivellmWeb.ChatLive do
     acc
   end
 
-  defp build_stream_message_attrs(final, tool_calls_history) do
+  defp build_stream_message_attrs(final, tool_calls_history, reasoning_steps) do
+    all_reasoning_steps = reasoning_steps ++ build_reasoning_steps(final.reasoning, [])
+
     %{
       role: "assistant",
       content: final.content,
       reasoning: blank_to_nil(final.reasoning),
+      reasoning_steps: all_reasoning_steps,
       reasoning_details: blank_list_to_nil(final.reasoning_details),
       raw_response: final.final_chunk && final.final_chunk.raw,
       tool_calls: blank_list_to_nil(tool_calls_history)
@@ -719,6 +835,28 @@ defmodule LivellmWeb.ChatLive do
 
   defp tool_call_entry(%{name: name, arguments: arguments, result: result}) do
     %{"name" => name, "arguments" => arguments, "result" => to_string(result)}
+  end
+
+  defp build_reasoning_steps(reasoning, tool_calls_history) do
+    []
+    |> maybe_add_reasoning_step(reasoning)
+    |> maybe_add_tool_steps(tool_calls_history)
+  end
+
+  defp maybe_add_reasoning_step(steps, reasoning) when reasoning in [nil, ""], do: steps
+
+  defp maybe_add_reasoning_step(steps, reasoning) do
+    steps ++ [%{"type" => "reasoning", "content" => reasoning}]
+  end
+
+  defp maybe_add_tool_steps(steps, tool_calls_history) when tool_calls_history in [nil, []],
+    do: steps
+
+  defp maybe_add_tool_steps(steps, tool_calls_history) do
+    steps ++
+      Enum.map(tool_calls_history, fn %{"name" => name} ->
+        %{"type" => "tool_call", "tool_name" => name, "status" => "completed"}
+      end)
   end
 
   defp blank_to_nil(nil), do: nil

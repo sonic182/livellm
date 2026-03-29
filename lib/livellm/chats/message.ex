@@ -1,13 +1,47 @@
 defmodule Livellm.Chats.Message do
+  @moduledoc """
+  Schema for chat messages.
+  """
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias Livellm.Chats.Chat
+  alias Livellm.Chats.Message.ReasoningStep
+
+  @type t :: %__MODULE__{
+          id: integer() | nil,
+          role: String.t(),
+          content: String.t() | nil,
+          reasoning: String.t() | nil,
+          reasoning_steps: list(ReasoningStep.t()),
+          reasoning_details: list(map()) | nil,
+          raw_response: map() | nil,
+          provider_messages: map() | nil,
+          input_tokens: integer() | nil,
+          output_tokens: integer() | nil,
+          total_tokens: integer() | nil,
+          cached_tokens: integer() | nil,
+          reasoning_tokens: integer() | nil,
+          input_cost: Decimal.t() | nil,
+          output_cost: Decimal.t() | nil,
+          total_cost: Decimal.t() | nil,
+          cost_currency: String.t() | nil,
+          provider_name: String.t() | nil,
+          provider_model: String.t() | nil,
+          provider_response_id: String.t() | nil,
+          tool_calls: list(map()) | nil,
+          chat_id: integer() | nil,
+          chat: Chat.t() | nil,
+          inserted_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
 
   schema "messages" do
     field :role, :string
     field :content, :string
     field :reasoning, :string
+    field :reasoning_steps, {:array, :map}, default: []
     field :reasoning_details, {:array, :map}
     field :raw_response, :map
     field :provider_messages, :map
@@ -33,6 +67,7 @@ defmodule Livellm.Chats.Message do
   @optional [
     :content,
     :reasoning,
+    :reasoning_steps,
     :reasoning_details,
     :raw_response,
     :provider_messages,

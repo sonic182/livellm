@@ -225,52 +225,60 @@
             <.chat_message :for={{id, msg} <- @streams.messages} id={id} message={msg} />
           </div>
 
-          <%!-- Streaming / thinking indicator --%>
-          <%= if not is_nil(@streaming_reasoning) do %>
-            <div id="streaming-reasoning" class="flex gap-3 px-6 py-2">
-              <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-amber-600/80 text-white mt-0.5">
-                <.icon name="hero-light-bulb" class="size-4" />
-              </div>
-              <div class="chat-reasoning max-w-[72%] rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed">
-                <div class="chat-reasoning-label mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
-                  <span>Thinking</span>
-                </div>
-                <div id="streaming-reasoning-content" class="whitespace-pre-wrap">
-                  {@streaming_reasoning}<span class="chat-reasoning-cursor inline-block w-0.5 h-4 animate-pulse ml-0.5 align-middle"></span>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
           <%= cond do %>
-            <% not is_nil(@streaming_content) -> %>
+            <% not is_nil(@streaming_content) or length(@reasoning_steps) > 0 -> %>
               <div id="streaming-message" class="flex gap-3 px-6 py-3">
                 <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-violet-700 text-white mt-0.5">
                   <.icon name="hero-cpu-chip" class="size-4" />
                 </div>
-                <div class="max-w-[72%] bg-base-200 text-base-content rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
-                  <.markdown_content
-                    markdown={@streaming_content}
-                    streaming={true}
-                    class="chat-markdown"
-                  />
-                  <div class="mt-2 flex items-center">
-                    <span class="inline-block h-4 w-0.5 animate-pulse bg-base-content/40"></span>
-                  </div>
-                </div>
-              </div>
-            <% not is_nil(@tool_call_status) -> %>
-              <div id="tool-call-indicator" class="flex gap-3 px-6 py-3">
-                <div class="size-8 rounded-full shrink-0 flex items-center justify-center bg-emerald-600 text-white mt-0.5">
-                  <.icon name="hero-wrench-screwdriver" class="size-4" />
-                </div>
-                <div class="bg-base-200 text-base-content rounded-2xl rounded-tl-sm px-4 py-3 text-sm flex items-center gap-2">
-                  <span class="text-[11px] font-semibold uppercase tracking-[0.18em]">
-                    Calling
-                  </span>
-                  <code class="font-mono text-xs">{@tool_call_status}</code>
-                  <span class="inline-block h-4 w-0.5 animate-pulse bg-base-content/40 ml-1">
-                  </span>
+                <div class="max-w-[72%] w-full space-y-2">
+                  <%= if length(@reasoning_steps) > 0 do %>
+                    <details
+                      id="streaming-reasoning"
+                      class="chat-reasoning group rounded-2xl rounded-tl-sm border px-3 py-2.5 text-sm"
+                      open
+                    >
+                      <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
+                        <div class="flex min-w-0 items-center gap-2">
+                          <.icon
+                            name="hero-light-bulb"
+                            class="size-3.5 shrink-0 chat-reasoning-label"
+                          />
+                          <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
+                            Trace
+                          </span>
+                          <span class="text-xs text-base-content/45">
+                            {if length(@reasoning_steps) == 1,
+                              do: "1 step",
+                              else: "#{length(@reasoning_steps)} steps"}
+                          </span>
+                        </div>
+
+                        <.icon
+                          name="hero-chevron-down"
+                          class="size-4 text-base-content/35 transition-transform duration-200 group-open:rotate-180"
+                        />
+                      </summary>
+
+                      <div class="mt-3">
+                        <.reasoning_timeline steps={@reasoning_steps} streaming={true} />
+                      </div>
+                    </details>
+                  <% end %>
+
+                  <%= if not is_nil(@streaming_content) do %>
+                    <div class="bg-base-200 text-base-content rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed">
+                      <.markdown_content
+                        markdown={@streaming_content}
+                        streaming={true}
+                        class="chat-markdown"
+                      />
+                      <div class="mt-2 flex items-center">
+                        <span class="inline-block h-4 w-0.5 animate-pulse bg-base-content/40">
+                        </span>
+                      </div>
+                    </div>
+                  <% end %>
                 </div>
               </div>
             <% @waiting -> %>

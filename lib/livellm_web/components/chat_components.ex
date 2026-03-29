@@ -132,57 +132,42 @@ defmodule LivellmWeb.ChatComponents do
 
       <%!-- Bubble --%>
       <div class="max-w-[72%] w-fit space-y-2">
-        <%= if @message.role == "assistant" and
-              ((is_binary(@message.reasoning) and @message.reasoning != "") or
-                 ((@message.reasoning_tokens || 0) > 0)) do %>
+        <%= if @message.role == "assistant" and message_reasoning_steps(@message) != [] do %>
           <details
             id={"#{@id}-reasoning"}
-            class="chat-reasoning rounded-2xl rounded-tl-sm border px-4 py-3 text-sm"
+            class="chat-reasoning group rounded-2xl rounded-tl-sm border px-3 py-2.5 text-sm"
           >
             <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
-              <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
-                Thinking
-              </span>
-              <%= if (@message.reasoning_tokens || 0) > 0 do %>
-                <span
-                  id={"#{@id}-reasoning-tokens"}
-                  class="chat-reasoning rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                >
-                  {@message.reasoning_tokens} reasoning
+              <div class="flex min-w-0 items-center gap-2">
+                <.icon name="hero-light-bulb" class="size-3.5 shrink-0 chat-reasoning-label" />
+                <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
+                  Trace
                 </span>
-              <% end %>
-            </summary>
-            <%= if is_binary(@message.reasoning) and @message.reasoning != "" do %>
-              <div
-                id={"#{@id}-reasoning-content"}
-                class="mt-3 whitespace-pre-wrap leading-relaxed"
-              >
-                {@message.reasoning}
+                <span class="text-xs text-base-content/45">
+                  {reasoning_step_count_label(message_reasoning_steps(@message))}
+                </span>
               </div>
-            <% end %>
-          </details>
-        <% end %>
 
-        <%= if @message.role == "assistant" and
-              is_list(Map.get(@message, :tool_calls)) and
-              @message.tool_calls != [] do %>
-          <details
-            id={"#{@id}-tool-calls"}
-            class="chat-reasoning rounded-2xl rounded-tl-sm border px-4 py-3 text-sm"
-          >
-            <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
-              <span class="chat-reasoning-label text-[11px] font-semibold uppercase tracking-[0.18em]">
-                Tools used
-              </span>
-              <span class="chat-reasoning rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                {length(@message.tool_calls)}
-              </span>
+              <div class="flex items-center gap-2">
+                <%= if (@message.reasoning_tokens || 0) > 0 do %>
+                  <span
+                    id={"#{@id}-reasoning-tokens"}
+                    class="chat-metric-badge chat-metric-badge--reasoning text-[11px]"
+                  >
+                    {@message.reasoning_tokens} reasoning
+                  </span>
+                <% end %>
+
+                <.icon
+                  name="hero-chevron-down"
+                  class="size-4 text-base-content/35 transition-transform duration-200 group-open:rotate-180"
+                />
+              </div>
             </summary>
-            <ul class="mt-3 space-y-1">
-              <%= for tc <- @message.tool_calls do %>
-                <li class="text-xs font-mono">{tc["name"]}</li>
-              <% end %>
-            </ul>
+
+            <div class="mt-3">
+              <.reasoning_timeline steps={message_reasoning_steps(@message)} streaming={false} />
+            </div>
           </details>
         <% end %>
 
@@ -199,6 +184,98 @@ defmodule LivellmWeb.ChatComponents do
           <% end %>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a reasoning timeline showing the model's thought process.
+  """
+  attr :steps, :list, required: true, doc: "list of reasoning steps"
+  attr :streaming, :boolean, default: false, doc: "whether the timeline is still streaming"
+
+  def reasoning_timeline(assigns) do
+    ~H"""
+    <div class="reasoning-timeline space-y-2">
+      <%= for {step, index} <- Enum.with_index(@steps) do %>
+        <div class={[
+          "relative pl-5",
+          index < length(@steps) - 1 && "pb-2"
+        ]}>
+          <%= if index < length(@steps) - 1 do %>
+            <div class="absolute bottom-0 left-[0.45rem] top-5 w-px bg-base-300/80"></div>
+          <% end %>
+
+          <%= if reasoning_step_type(step) == :reasoning do %>
+            <details class="group rounded-xl border border-base-300 bg-base-100/55 px-3 py-2.5">
+              <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
+                <div class="flex min-w-0 items-center gap-2">
+                  <div class="absolute left-0 top-1 flex size-4 items-center justify-center rounded-full bg-base-300 text-base-content/65">
+                    <.icon name="hero-light-bulb" class="size-2.5" />
+                  </div>
+                  <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-base-content/55">
+                    Reasoning
+                  </span>
+                </div>
+                <.icon
+                  name="hero-chevron-down"
+                  class="size-4 text-base-content/35 transition-transform duration-200 group-open:rotate-180"
+                />
+              </summary>
+              <div class="mt-2 whitespace-pre-wrap pl-0 text-sm leading-relaxed text-base-content/80">
+                <%= if reasoning_step_content(step) not in [nil, ""] do %>
+                  {reasoning_step_content(step)}
+                <% else %>
+                  <span class="italic text-base-content/45">Working...</span>
+                <% end %>
+              </div>
+            </details>
+          <% end %>
+
+          <%= if reasoning_step_type(step) == :tool_call do %>
+            <div class={[
+              "rounded-xl border px-3 py-2.5",
+              reasoning_step_status(step) == :running &&
+                "border-emerald-500/20 bg-emerald-500/10 text-emerald-200",
+              reasoning_step_status(step) == :completed &&
+                "border-base-300 bg-base-100/55 text-base-content"
+            ]}>
+              <div class="flex items-center gap-2.5">
+                <div class={[
+                  "absolute left-0 top-1 flex size-4 items-center justify-center rounded-full",
+                  reasoning_step_status(step) == :running && "bg-emerald-500/20 text-emerald-300",
+                  reasoning_step_status(step) == :completed && "bg-base-300 text-base-content/65"
+                ]}>
+                  <%= if reasoning_step_status(step) == :running do %>
+                    <span class="size-2.5 rounded-full border border-current border-t-transparent animate-spin">
+                    </span>
+                  <% else %>
+                    <.icon name="hero-wrench-screwdriver" class="size-2.5" />
+                  <% end %>
+                </div>
+
+                <div class={[
+                  "text-[11px] font-semibold uppercase tracking-[0.18em]",
+                  reasoning_step_status(step) == :running && "text-emerald-300/85",
+                  reasoning_step_status(step) == :completed && "text-base-content/50"
+                ]}>
+                  {if reasoning_step_status(step) == :running, do: "Calling", else: "Used tool"}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <code class="rounded-md bg-black/10 px-2 py-1 font-mono text-xs text-current dark:bg-white/5">
+                      {reasoning_step_tool_name(step)}
+                    </code>
+                    <%= if reasoning_step_status(step) == :completed do %>
+                      <span class="text-xs text-base-content/45">done</span>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
     </div>
     """
   end
@@ -258,4 +335,57 @@ defmodule LivellmWeb.ChatComponents do
       ]
     ]
   end
+
+  defp message_reasoning_steps(message) do
+    case Map.get(message, :reasoning_steps) do
+      [_ | _] = steps -> steps
+      _ -> build_fallback_reasoning_steps(message)
+    end
+  end
+
+  defp build_fallback_reasoning_steps(message) do
+    []
+    |> maybe_add_fallback_reasoning(Map.get(message, :reasoning))
+    |> maybe_add_fallback_tool_calls(Map.get(message, :tool_calls))
+  end
+
+  defp maybe_add_fallback_reasoning(steps, reasoning) when reasoning in [nil, ""], do: steps
+
+  defp maybe_add_fallback_reasoning(steps, reasoning),
+    do: steps ++ [%{"type" => "reasoning", "content" => reasoning}]
+
+  defp maybe_add_fallback_tool_calls(steps, tool_calls) when tool_calls in [nil, []], do: steps
+
+  defp maybe_add_fallback_tool_calls(steps, tool_calls) do
+    steps ++
+      Enum.map(tool_calls, fn tool_call ->
+        %{
+          "type" => "tool_call",
+          "tool_name" => Map.get(tool_call, "name") || Map.get(tool_call, :name),
+          "status" => "completed"
+        }
+      end)
+  end
+
+  defp reasoning_step_count_label(steps) do
+    count = length(steps)
+    if count == 1, do: "1 step", else: "#{count} steps"
+  end
+
+  defp reasoning_step_type(%{type: type}) when type in [:reasoning, :tool_call], do: type
+  defp reasoning_step_type(%{"type" => "reasoning"}), do: :reasoning
+  defp reasoning_step_type(%{"type" => "tool_call"}), do: :tool_call
+
+  defp reasoning_step_content(%{content: content}), do: content
+  defp reasoning_step_content(%{"content" => content}), do: content
+  defp reasoning_step_content(_step), do: nil
+
+  defp reasoning_step_status(%{status: status}) when status in [:running, :completed], do: status
+  defp reasoning_step_status(%{"status" => "running"}), do: :running
+  defp reasoning_step_status(%{"status" => "completed"}), do: :completed
+  defp reasoning_step_status(_step), do: nil
+
+  defp reasoning_step_tool_name(%{tool_name: tool_name}), do: tool_name
+  defp reasoning_step_tool_name(%{"tool_name" => tool_name}), do: tool_name
+  defp reasoning_step_tool_name(_step), do: nil
 end
