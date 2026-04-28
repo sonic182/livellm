@@ -512,6 +512,152 @@ defmodule LivellmWeb.ChatLiveTest do
            ]
   end
 
+  test "streaming tool loops treat content before tool calls as reasoning when needed", %{
+    conn: conn
+  } do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
+        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai,
+             status: :ok,
+             stream: [
+               ~s(data: {"choices":[{"delta":{"content":"Final answer"},"index":0,"finish_reason":null}]}),
+               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]})
+             ]
+           }}
+        else
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai,
+             status: :ok,
+             stream: [
+               ~s(data: {"choices":[{"delta":{"content":"Thought before tool"},"index":0,"finish_reason":null}]}),
+               ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_memory_1","type":"function","function":{"name":"memory","arguments":"{\\"action\\":\\"list\\"}"}}]},"index":0,"finish_reason":null}]}),
+               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}]})
+             ]
+           }}
+        end
+      end
+    )
+
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => Integer.to_string(provider_config.id),
+      "model" => "gpt-4.1-mini",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    render_click(element(view, "#tool-memory"))
+    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _first_history,
+                    nil, _chat_id, first_opts}
+
+    assert Keyword.get(first_opts, :stream) == true
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _second_history,
+                    nil, chat_id, second_opts}
+
+    assert Keyword.get(second_opts, :stream) == true
+
+    _ = :sys.get_state(view.pid)
+
+    chat = Chats.get_chat!(chat_id)
+    assistant_msg = Chats.latest_assistant_message(chat)
+
+    assert assistant_msg.content == "Final answer"
+
+    assert assistant_msg.reasoning_steps == [
+             %{"type" => "reasoning", "content" => "Thought before tool"},
+             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"}
+           ]
+  end
+
+  test "streaming tool loops replay tool-call assistant turns with non-nil content", %{
+    conn: conn
+  } do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
+        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
+          assert [
+                   %LlmComposer.Message{
+                     type: :assistant,
+                     content: "Using tool results",
+                     function_calls: [
+                       %LlmComposer.FunctionCall{id: "call_memory_1", name: "memory"}
+                     ]
+                   }
+                 ] =
+                   Enum.filter(
+                     history,
+                     &match?(%LlmComposer.Message{type: :assistant, function_calls: [_ | _]}, &1)
+                   )
+
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai,
+             status: :ok,
+             stream: [
+               ~s(data: {"choices":[{"delta":{"content":"Final answer"},"index":0,"finish_reason":null}]}),
+               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]})
+             ]
+           }}
+        else
+          {:ok,
+           %LlmComposer.LlmResponse{
+             provider: :open_ai,
+             status: :ok,
+             stream: [
+               ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_memory_1","type":"function","function":{"name":"memory","arguments":"{\\"action\\":\\"list\\"}"}}]},"index":0,"finish_reason":null}]}),
+               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}]})
+             ]
+           }}
+        end
+      end
+    )
+
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => Integer.to_string(provider_config.id),
+      "model" => "gpt-4.1-mini",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    render_click(element(view, "#tool-memory"))
+    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _first_history,
+                    nil, _chat_id, _first_opts}
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _second_history,
+                    nil, chat_id, _second_opts}
+
+    _ = :sys.get_state(view.pid)
+
+    chat = Chats.get_chat!(chat_id)
+    assistant_msg = Chats.latest_assistant_message(chat)
+
+    assert assistant_msg.content == "Final answer"
+  end
+
   test "tool execution errors are returned to the model instead of crashing the turn", %{
     conn: conn
   } do

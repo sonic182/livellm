@@ -577,7 +577,7 @@ defmodule LivellmWeb.ChatLive do
 
         asst_msg = %LlmComposer.Message{
           type: :assistant,
-          content: blank_to_nil(final.content),
+          content: blank_to_nil(final.content) || "Using tool results",
           function_calls: calls
         }
 
@@ -594,7 +594,11 @@ defmodule LivellmWeb.ChatLive do
         next_trace_acc =
           accumulate_trace(
             trace_acc,
-            final.reasoning,
+            trace_reasoning_for_tool_iteration(
+              final.reasoning,
+              final.reasoning_details,
+              final.content
+            ),
             final.reasoning_details,
             new_tool_calls,
             current_usage_entry
@@ -1119,6 +1123,13 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp next_iteration(trace_acc), do: length(trace_acc.usage_breakdown) + 1
+
+  defp trace_reasoning_for_tool_iteration(reasoning, reasoning_details, content) do
+    case reasoning_content(reasoning, reasoning_details) do
+      nil -> blank_to_nil(content)
+      _content -> reasoning
+    end
+  end
 
   defp reasoning_content(reasoning, _reasoning_details) when reasoning not in [nil, ""],
     do: reasoning
