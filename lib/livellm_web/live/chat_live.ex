@@ -840,6 +840,16 @@ defmodule LivellmWeb.ChatLive do
     |> Map.merge(Usage.aggregate_usage_breakdown(final_trace_acc.usage_breakdown))
   end
 
+  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_calls: deltas})
+       when is_list(deltas) do
+    Enum.reduce(deltas, acc, &accumulate_tool_call_delta/2)
+  end
+
+  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_calls: delta})
+       when is_map(delta) do
+    accumulate_tool_call_delta(delta, acc)
+  end
+
   defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: deltas})
        when is_list(deltas) do
     Enum.reduce(deltas, acc, &accumulate_tool_call_delta/2)
