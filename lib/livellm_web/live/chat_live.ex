@@ -9,12 +9,12 @@ defmodule LivellmWeb.ChatLive do
   alias Livellm.Chats.ActiveTasks
   alias Livellm.Chats.Message.ReasoningStep
   alias Livellm.Config
+  alias Livellm.Models
   alias Livellm.Tools
   alias Livellm.Usage
-  alias LlmComposer
-  alias LlmComposer.FunctionCallHelpers
-  alias LlmComposer.FunctionExecutor
-  alias LlmComposer.LlmResponse
+  alias LlmComposer.Agent.Result, as: AgentResult
+  alias LlmComposer.Agent.StreamCollector
+  alias LlmComposer.StreamChunk
 
   require Logger
 
@@ -43,6 +43,12 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:tools_panel_open, false)
      |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
+     |> assign(:model_list_open, false)
+     |> assign(:model_query, nil)
+     |> assign(:models, [])
+     |> assign(:models_loading, false)
+     |> assign_model_options()
+     |> load_models()
      |> stream(:messages, [])}
   end
 
@@ -85,6 +91,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:waiting, waiting)
      |> clear_transient_trace()
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
+     |> assign(:model_list_open, false)
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> stream(:messages, messages, reset: true)}
   end
 
@@ -126,8 +134,6 @@ defmodule LivellmWeb.ChatLive do
         {:noreply, put_flash(socket, :error, "Could not start chat.")}
 
       {:ok, chat} ->
-        Logger.debug("[chat_live] user_message chat_id=#{chat.id} content=#{inspect(content)}")
-
         {:ok, user_msg} = Chats.create_message(chat, %{role: "user", content: content})
 
         provider_config = Enum.find(configs, &(&1.id == provider_id))
@@ -190,18 +196,11 @@ defmodule LivellmWeb.ChatLive do
     stream_mode = params["streaming"] == "true"
 
     socket =
-      if socket.assigns.chat do
-        {:ok, updated_chat} =
-          Chats.update_chat(socket.assigns.chat, %{
-            model: selected_model,
-            reasoning_effort: reasoning_effort,
-            provider_config_id: new_provider_id
-          })
-
-        assign(socket, :chat, updated_chat)
-      else
-        socket
-      end
+      maybe_update_chat(socket, %{
+        model: selected_model,
+        reasoning_effort: reasoning_effort,
+        provider_config_id: new_provider_id
+      })
 
     {:noreply,
      socket
@@ -209,6 +208,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
+     |> put_model_query(params["model"])
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> push_event("save_chat_settings", %{
        streaming: stream_mode,
        enabled_tool_names: socket.assigns.enabled_tool_names
@@ -245,12 +246,75 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_info({:llm_done, _chat, assistant_msg}, socket) do
+  def handle_event("open_model_list", _params, socket) do
+    # Focusing shows the whole catalog; the query only narrows it once the user types.
+    {:noreply,
+     socket
+     |> assign(:model_list_open, true)
+     |> put_model_query(nil)}
+  end
+
+  @impl true
+  def handle_event("close_model_list", _params, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_event("select_model", %{"option" => model}, socket) do
+    {:noreply, select_model(socket, model)}
+  end
+
+  @impl true
+  def handle_event("model_key", %{"key" => "ArrowDown"}, socket) do
+    if socket.assigns.model_list_open do
+      {:noreply, move_model_highlight(socket, 1)}
+    else
+      # The first ArrowDown opens the list on its first option rather than skipping one.
+      {:noreply,
+       socket
+       |> assign(:model_list_open, true)
+       |> assign(:model_highlight, 0)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "ArrowUp"}, socket) do
+    {:noreply, move_model_highlight(socket, -1)}
+  end
+
+  def handle_event("model_key", %{"key" => "Enter"}, socket) do
+    %{model_options: options, model_highlight: highlight} = socket.assigns
+
+    case Enum.at(options, highlight) do
+      nil -> {:noreply, close_model_list(socket)}
+      model -> {:noreply, select_model(socket, model)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "Escape"}, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_async(:models, {:ok, models}, socket) do
+    {:noreply,
+     socket
+     |> assign(:models, models)
+     |> assign(:models_loading, false)
+     |> assign_model_options()}
+  end
+
+  def handle_async(:models, {:exit, reason}, socket) do
+    Logger.warning("[chat_live] model catalog fetch crashed: #{inspect(reason)}")
+    {:noreply, assign(socket, :models_loading, false)}
+  end
+
+  @impl true
+  def handle_info({:llm_done, chat, assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
      |> clear_transient_trace()
-     |> refresh_chat_metrics(assistant_msg.chat_id)
+     |> assign(:chat_metrics, chat_metrics(chat))
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -286,36 +350,37 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_info({:stream_chunk, _chat, content}, socket) do
-    {:noreply, assign(socket, :streaming_content, content)}
+  def handle_info({:stream_chunk, _chat, delta}, socket) do
+    {:noreply,
+     assign(socket, :streaming_content, (socket.assigns.streaming_content || "") <> delta)}
   end
 
   @impl true
-  def handle_info({:stream_reasoning, _chat, reasoning}, socket) do
+  def handle_info({:stream_reasoning, _chat, delta}, socket) do
     steps = socket.assigns.reasoning_steps
 
     updated_steps =
       case List.last(steps) do
-        %{type: :reasoning, content: _} = last_step ->
-          List.replace_at(steps, -1, %{last_step | content: reasoning})
+        %{type: :reasoning, content: content} = last_step ->
+          List.replace_at(steps, -1, %{last_step | content: content <> delta})
 
         _ ->
-          steps ++ [ReasoningStep.reasoning(reasoning)]
+          steps ++ [ReasoningStep.reasoning(delta)]
       end
 
     {:noreply,
      socket
-     |> assign(:streaming_reasoning, reasoning)
+     |> assign(:streaming_reasoning, (socket.assigns.streaming_reasoning || "") <> delta)
      |> assign(:reasoning_steps, updated_steps)}
   end
 
   @impl true
-  def handle_info({:stream_done, _chat, %Livellm.Chats.Message{} = assistant_msg}, socket) do
+  def handle_info({:stream_done, chat, %Livellm.Chats.Message{} = assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
      |> clear_transient_trace()
-     |> refresh_chat_metrics(assistant_msg.chat_id)
+     |> assign(:chat_metrics, chat_metrics(chat))
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -339,20 +404,8 @@ defmodule LivellmWeb.ChatLive do
     |> assign(:reasoning_steps, [])
   end
 
-  defp refresh_chat_metrics(socket, chat_id) when is_integer(chat_id) do
-    chat =
-      case socket.assigns.chat do
-        %{id: ^chat_id} = current_chat -> current_chat
-        _ -> Chats.get_chat!(chat_id)
-      end
-
-    assign(socket, :chat_metrics, chat |> Chats.list_messages() |> Usage.aggregate_chat_metrics())
-  end
-
-  defp refresh_chat_metrics(socket, _chat_id), do: socket
-
   defp parse_enabled_tool_names(names) when is_list(names) do
-    available_tool_names = MapSet.new(socket_tool_names())
+    available_tool_names = MapSet.new(Enum.map(Tools.catalog(), & &1.name))
 
     names
     |> Enum.filter(&is_binary/1)
@@ -361,10 +414,6 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp parse_enabled_tool_names(_names), do: []
-
-  defp socket_tool_names do
-    Enum.map(Tools.catalog(), & &1.name)
-  end
 
   defp toggle_tool_name(enabled_tool_names, tool_name) do
     if tool_name in enabled_tool_names do
@@ -392,6 +441,92 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp stream_topic(chat_id), do: "chat_stream:#{chat_id}"
+
+  defp put_model_query(socket, query) do
+    socket
+    |> assign(:model_query, query)
+    |> assign_model_options()
+  end
+
+  # The filtered list lives in an assign so Enter and the arrow keys resolve against
+  # exactly what is on screen.
+  defp assign_model_options(socket) do
+    options = Models.filter(socket.assigns.models, socket.assigns.model_query)
+
+    socket
+    |> assign(:model_options, options)
+    |> assign(:model_highlight, 0)
+  end
+
+  defp move_model_highlight(socket, step) do
+    last = length(socket.assigns.model_options) - 1
+    highlight = socket.assigns.model_highlight + step
+
+    assign(socket, :model_highlight, highlight |> max(0) |> min(max(last, 0)))
+  end
+
+  defp close_model_list(socket) do
+    socket
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp select_model(socket, model) do
+    socket
+    |> maybe_update_chat(%{model: model})
+    |> assign(:selected_model, model)
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp maybe_update_chat(%{assigns: %{chat: nil}} = socket, _attrs), do: socket
+
+  defp maybe_update_chat(socket, attrs) do
+    case Chats.update_chat(socket.assigns.chat, attrs) do
+      {:ok, chat} ->
+        assign(socket, :chat, chat)
+
+      # A blank model is transient combobox search state, not something to persist.
+      {:error, _changeset} ->
+        socket
+    end
+  end
+
+  defp load_models_if_changed(socket, previous_provider_id) do
+    if socket.assigns.selected_provider_id == previous_provider_id do
+      socket
+    else
+      load_models(socket)
+    end
+  end
+
+  defp load_models(socket) do
+    case Enum.find(
+           socket.assigns.provider_configs,
+           &(&1.id == socket.assigns.selected_provider_id)
+         ) do
+      nil ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, false)
+        |> assign_model_options()
+
+      config ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, connected?(socket))
+        |> assign_model_options()
+        |> start_async(:models, fn -> Models.list(config) end)
+    end
+  end
+
+  # Recomputed rather than merged: a finished turn can race the `push_patch` that re-aggregates
+  # the chat, and merging would then count the same message twice.
+  defp chat_metrics(chat) do
+    chat
+    |> Chats.list_messages()
+    |> Usage.aggregate_chat_metrics()
+  end
 
   defp broadcast(chat_id, message) do
     Phoenix.PubSub.broadcast(Livellm.PubSub, stream_topic(chat_id), message)
@@ -424,8 +559,11 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp run_llm_task(req, history, chat) do
-    functions = Tools.enabled_definitions(req.enabled_tool_names)
-    run_llm_loop(req, history, chat, functions)
+    attach_agent_handler(chat)
+
+    req
+    |> run_llm_request(history, chat.id)
+    |> handle_llm_result(chat)
   rescue
     error ->
       Logger.error(
@@ -434,736 +572,148 @@ defmodule LivellmWeb.ChatLive do
 
       broadcast(chat.id, {:llm_response, chat, {:error, error}})
   after
+    detach_agent_handler(chat)
     ActiveTasks.mark_done(chat.id)
   end
 
-  @max_tool_iterations 10
-
-  defp run_llm_loop(
-         req,
-         history,
-         chat,
-         functions,
-         iteration \\ 0,
-         trace_acc \\ empty_trace_acc()
-       )
-
-  defp run_llm_loop(
-         req,
-         _history,
-         chat,
-         _functions,
-         iteration,
-         _trace_acc
-       )
-       when iteration >= @max_tool_iterations do
-    Logger.error("[chat_live] tool loop limit reached chat_id=#{chat.id} iteration=#{iteration}")
-    handle_final_llm_result({:error, :tool_loop_limit}, chat, req)
-  end
-
-  defp run_llm_loop(req, history, chat, functions, iteration, trace_acc) do
-    req
-    |> run_llm_request(history, chat.id, functions: functions)
-    |> handle_llm_result(
-      chat,
-      req,
-      history,
-      functions,
-      iteration,
-      trace_acc
-    )
-  end
-
-  defp run_llm_request(req, history, chat_id, extra_opts) do
-    opts = [stream: req.stream_mode] ++ extra_opts
-
+  defp run_llm_request(req, history, chat_id) do
     llm_runner().run(
       req.provider_config,
       req.model,
       history,
       req.reasoning_effort,
       chat_id,
-      opts
+      stream: req.stream_mode,
+      functions: Tools.enabled_definitions(req.enabled_tool_names),
+      telemetry_metadata: %{chat_id: chat_id}
     )
   end
 
-  # Non-streaming response with active functions: check for tool calls and loop
-  defp handle_llm_result(
-         {:ok, %{stream: nil} = llm_response},
-         chat,
-         req,
-         history,
-         [_ | _] = functions,
-         iteration,
-         trace_acc
-       ) do
-    case LlmResponse.function_calls(llm_response) do
-      calls when calls not in [nil, []] ->
-        Logger.debug(
-          "[chat_live] tool_calls chat_id=#{chat.id} iteration=#{iteration} history_len=#{length(history)} calls=#{inspect(Enum.map(calls, & &1.name))} args=#{inspect(Enum.map(calls, & &1.arguments))}"
-        )
+  # `Agent` reports intermediate reasoning and tool calls through telemetry; its answer stream
+  # contains only the final tool-free response.
+  defp agent_handler_id(chat), do: {__MODULE__, :agent, chat.id}
 
-        provider_mod = provider_module(req.provider_config.provider)
+  defp attach_agent_handler(chat) do
+    chat_id = chat.id
 
-        executed = execute_tool_calls(chat, calls, functions)
+    :telemetry.attach_many(
+      agent_handler_id(chat),
+      [
+        [:llm_composer, :agent, :reasoning, :delta],
+        [:llm_composer, :agent, :tool, :start],
+        [:llm_composer, :agent, :tool, :stop]
+      ],
+      fn
+        [:llm_composer, :agent, :reasoning, :delta],
+        _measurements,
+        %{chat_id: ^chat_id, reasoning: reasoning},
+        _config
+        when is_binary(reasoning) ->
+          broadcast(chat_id, {:stream_reasoning, chat, reasoning})
 
-        dummy_user = %LlmComposer.Message{type: :user, content: ""}
+        [:llm_composer, :agent, :tool, :start],
+        _measurements,
+        %{chat_id: ^chat_id, name: tool_name},
+        _config ->
+          broadcast(chat_id, {:tool_call_start, chat, tool_name})
 
-        asst_msg =
-          FunctionCallHelpers.build_assistant_with_tools(provider_mod, llm_response, dummy_user)
+        [:llm_composer, :agent, :tool, :stop],
+        _measurements,
+        %{chat_id: ^chat_id, name: tool_name},
+        _config ->
+          broadcast(chat_id, {:tool_call_end, chat, tool_name})
 
-        tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
-        new_tool_calls = Enum.map(executed, &tool_call_entry/1)
-        current_reasoning_details = llm_response.main_response.reasoning_details || []
+        _event, _measurements, _metadata, _config ->
+          :ok
+      end,
+      nil
+    )
+  end
 
-        current_usage_entry =
-          Usage.usage_breakdown_entry_from_response(
-            llm_response,
-            next_iteration(trace_acc),
-            "tool_calls"
-          )
+  defp detach_agent_handler(chat), do: :telemetry.detach(agent_handler_id(chat))
 
-        next_trace_acc =
-          accumulate_trace(
-            trace_acc,
-            llm_response.main_response.reasoning,
-            current_reasoning_details,
-            new_tool_calls,
-            current_usage_entry
-          )
+  defp handle_llm_result({:ok, %AgentResult{} = result}, chat) do
+    cost_info = StreamCollector.aggregate_cost_infos(result.cost_infos)
+    save_and_broadcast(chat, agent_message_attrs(result, cost_info), :llm_done)
+  end
 
-        run_llm_loop(
-          req,
-          history ++ [asst_msg | tool_msgs],
-          chat,
-          functions,
-          iteration + 1,
-          next_trace_acc
-        )
+  defp handle_llm_result({:ok, stream}, chat) do
+    Logger.debug("[chat_live] streaming started chat_id=#{chat.id}")
 
-      _ ->
-        handle_final_llm_result({:ok, llm_response}, chat, req, trace_acc)
+    case run_agent_stream(stream, chat) do
+      %StreamChunk{type: :done, cost_info: cost_info, metadata: %{agent_result: result}} ->
+        save_and_broadcast(chat, agent_message_attrs(result, cost_info), :stream_done)
+
+      %StreamChunk{type: :error, metadata: metadata} ->
+        broadcast(chat.id, {:llm_response, chat, {:error, metadata[:reason]}})
+
+      nil ->
+        broadcast(chat.id, {:llm_response, chat, {:error, :empty_stream}})
     end
   end
 
-  # Streaming response with active functions: accumulate chunks, then check for tool calls
-  defp handle_llm_result(
-         {:ok, %{stream: stream, provider: provider}},
-         chat,
-         req,
-         history,
-         [_ | _] = functions,
-         iteration,
-         trace_acc
-       )
-       when not is_nil(stream) do
-    Logger.debug(
-      "[chat_live] streaming started (with functions) chat_id=#{chat.id} provider=#{provider}"
-    )
-
-    final = run_stream(stream, provider, req.model, chat)
-
-    Logger.debug(
-      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} tool_calls=#{inspect(final.tool_calls && Enum.map(final.tool_calls, & &1.name))}"
-    )
-
-    case final.tool_calls do
-      calls when calls not in [nil, []] ->
-        Logger.debug(
-          "[chat_live] stream tool_calls chat_id=#{chat.id} iteration=#{iteration} calls=#{inspect(Enum.map(calls, & &1.name))}"
-        )
-
-        executed = execute_tool_calls(chat, calls, functions)
-
-        asst_msg = %LlmComposer.Message{
-          type: :assistant,
-          content: blank_to_nil(final.content) || "Using tool results",
-          function_calls: calls
-        }
-
-        tool_msgs = FunctionCallHelpers.build_tool_result_messages(executed)
-        new_tool_calls = Enum.map(executed, &tool_call_entry/1)
-
-        current_usage_entry =
-          Usage.usage_breakdown_entry_from_chunk(
-            final.final_chunk,
-            next_iteration(trace_acc),
-            "tool_calls"
-          )
-
-        next_trace_acc =
-          accumulate_trace(
-            trace_acc,
-            trace_reasoning_for_tool_iteration(
-              final.reasoning,
-              final.reasoning_details,
-              final.content
-            ),
-            final.reasoning_details,
-            new_tool_calls,
-            current_usage_entry
-          )
-
-        run_llm_loop(
-          req,
-          history ++ [asst_msg | tool_msgs],
-          chat,
-          functions,
-          iteration + 1,
-          next_trace_acc
-        )
-
-      _ ->
-        save_stream_result(final, chat, trace_acc)
-    end
-  end
-
-  defp handle_llm_result(
-         result,
-         chat,
-         req,
-         _history,
-         _functions,
-         _iteration,
-         trace_acc
-       ) do
-    handle_final_llm_result(result, chat, req, trace_acc)
-  end
-
-  defp handle_final_llm_result(result, chat, req, trace_acc \\ empty_trace_acc())
-
-  defp handle_final_llm_result(
-         {:ok, %{stream: stream, provider: provider}},
-         chat,
-         req,
-         trace_acc
-       )
-       when not is_nil(stream) do
-    Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
-
-    final = run_stream(stream, provider, req.model, chat)
-
-    Logger.debug(
-      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
-    )
-
-    save_stream_result(final, chat, trace_acc)
-  end
-
-  defp handle_final_llm_result(
-         {:ok, llm_response},
-         chat,
-         _req,
-         trace_acc
-       ) do
-    %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
-      llm_response.main_response
-
-    final_trace_acc =
-      accumulate_trace(
-        trace_acc,
-        reasoning,
-        reasoning_details,
-        [],
-        Usage.usage_breakdown_entry_from_response(
-          llm_response,
-          next_iteration(trace_acc),
-          "final"
-        )
-      )
-
-    attrs =
-      %{
-        role: "assistant",
-        content: content,
-        reasoning: reasoning,
-        reasoning_steps: final_trace_acc.reasoning_steps,
-        reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
-        raw_response: llm_response.raw,
-        usage_breakdown: blank_list_to_nil(final_trace_acc.usage_breakdown),
-        tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
-      }
-      |> Map.merge(Usage.aggregate_usage_breakdown(final_trace_acc.usage_breakdown))
-
-    case Chats.create_message(chat, attrs) do
-      {:ok, assistant_msg} ->
-        broadcast(chat.id, {:llm_done, chat, assistant_msg})
-
-      {:error, changeset} ->
-        Logger.error(
-          "[chat_live] failed to save non-stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
-        )
-
-        broadcast(chat.id, {:llm_response, chat, {:error, :save_failed}})
-    end
-  end
-
-  defp handle_final_llm_result(
-         {:error, reason},
-         chat,
-         _req,
-         _trace_acc
-       ) do
+  defp handle_llm_result({:error, reason}, chat) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp save_stream_result(final, chat, trace_acc) do
-    case Chats.create_message(
-           chat,
-           build_stream_message_attrs(final, trace_acc)
-         ) do
-      {:ok, assistant_msg} ->
-        broadcast(chat.id, {:stream_done, chat, assistant_msg})
+  # The agent stream carries only the final, tool-free answer plus a terminal :done/:error chunk.
+  defp run_agent_stream(stream, chat) do
+    Enum.reduce(stream, nil, fn
+      %StreamChunk{type: :text_delta, text: text}, acc when text not in [nil, ""] ->
+        broadcast(chat.id, {:stream_chunk, chat, text})
+        acc
 
-      {:error, changeset} ->
-        Logger.error(
-          "[chat_live] failed to save stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
-        )
-
-        broadcast(chat.id, {:stream_save_failed, chat})
-    end
-  end
-
-  defp run_stream(stream, provider, model, chat) do
-    initial_acc = %{
-      content: "",
-      reasoning: "",
-      reasoning_details: [],
-      final_chunk: nil,
-      tool_calls_acc: %{},
-      tool_call_order: 0,
-      reasoning_steps: [],
-      chat: chat
-    }
-
-    final =
-      stream
-      |> LlmComposer.parse_stream_response(provider, track_costs: true, model: model)
-      |> Enum.reduce(initial_acc, &handle_stream_chunk/2)
-
-    tool_calls =
-      case build_tool_calls_from_completed_response(final.final_chunk, provider) do
-        calls when calls not in [nil, []] -> calls
-        _ -> build_tool_calls_from_stream_acc(final.tool_calls_acc)
-      end
-
-    %{final | tool_calls_acc: nil} |> Map.put(:tool_calls, tool_calls)
-  end
-
-  defp handle_stream_chunk(chunk, acc) do
-    acc
-    |> maybe_append_text(chunk)
-    |> maybe_append_reasoning(chunk)
-    |> maybe_accumulate_tool_call_delta(chunk)
-    |> maybe_capture_final_chunk(chunk)
-  end
-
-  defp maybe_append_text(acc, %{text: text}) when text not in [nil, ""] do
-    new_content = acc.content <> text
-
-    Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(text)}")
-    broadcast(acc.chat.id, {:stream_chunk, acc.chat, new_content})
-
-    %{acc | content: new_content}
-  end
-
-  defp maybe_append_text(acc, _chunk), do: acc
-
-  defp maybe_append_reasoning(acc, chunk) do
-    reasoning = chunk.reasoning || ""
-    reasoning_details = chunk.reasoning_details || []
-
-    if reasoning == "" and reasoning_details == [] do
-      acc
-    else
-      new_reasoning = acc.reasoning <> reasoning
-      new_reasoning_details = acc.reasoning_details ++ reasoning_details
-
-      Logger.debug(
-        "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
-      )
-
-      broadcast(acc.chat.id, {:stream_reasoning, acc.chat, new_reasoning})
-
-      %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
-    end
-  end
-
-  defp maybe_capture_final_chunk(acc, %{type: :usage} = chunk) do
-    Logger.debug(
-      "[chat_live] stream usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
-    )
-
-    %{acc | final_chunk: chunk}
-  end
-
-  defp maybe_capture_final_chunk(acc, %{type: :done} = chunk) do
-    Logger.debug(
-      "[chat_live] stream done-with-usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
-    )
-
-    final_chunk =
-      if not is_nil(chunk.usage) or not is_nil(chunk.cost_info) or is_nil(acc.final_chunk) do
+      %StreamChunk{type: type} = chunk, _acc when type in [:done, :error] ->
         chunk
-      else
-        acc.final_chunk
-      end
 
-    %{acc | final_chunk: final_chunk}
-  end
-
-  defp maybe_capture_final_chunk(acc, %{type: type}) do
-    Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{acc.chat.id} type=#{type}")
-    acc
-  end
-
-  defp build_stream_message_attrs(final, trace_acc) do
-    final_trace_acc =
-      accumulate_trace(
-        trace_acc,
-        final.reasoning,
-        final.reasoning_details,
-        [],
-        Usage.usage_breakdown_entry_from_chunk(
-          final.final_chunk,
-          next_iteration(trace_acc),
-          "final"
-        )
-      )
-
-    %{
-      role: "assistant",
-      content: final.content,
-      reasoning: blank_to_nil(final.reasoning),
-      reasoning_steps: final_trace_acc.reasoning_steps,
-      reasoning_details: blank_list_to_nil(final_trace_acc.reasoning_details_history),
-      raw_response: final.final_chunk && final.final_chunk.raw,
-      usage_breakdown: blank_list_to_nil(final_trace_acc.usage_breakdown),
-      tool_calls: blank_list_to_nil(final_trace_acc.tool_calls_history)
-    }
-    |> Map.merge(Usage.aggregate_usage_breakdown(final_trace_acc.usage_breakdown))
-  end
-
-  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_calls: deltas})
-       when is_list(deltas) do
-    Enum.reduce(deltas, acc, &accumulate_tool_call_delta/2)
-  end
-
-  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_calls: delta})
-       when is_map(delta) do
-    accumulate_tool_call_delta(delta, acc)
-  end
-
-  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: deltas})
-       when is_list(deltas) do
-    Enum.reduce(deltas, acc, &accumulate_tool_call_delta/2)
-  end
-
-  defp maybe_accumulate_tool_call_delta(acc, %{type: :tool_call_delta, tool_call: delta})
-       when is_map(delta) do
-    accumulate_tool_call_delta(delta, acc)
-  end
-
-  defp maybe_accumulate_tool_call_delta(acc, _chunk), do: acc
-
-  defp build_tool_calls_from_stream_acc(tool_calls_acc) when map_size(tool_calls_acc) == 0,
-    do: nil
-
-  defp build_tool_calls_from_stream_acc(tool_calls_acc) do
-    alias LlmComposer.FunctionCallExtractors
-
-    sorted =
-      tool_calls_acc
-      |> Map.values()
-      |> Enum.sort_by(&stream_tool_call_sort_key/1)
-      |> Enum.map(&Map.delete(&1, "_order"))
-
-    FunctionCallExtractors.from_tool_calls(%{"tool_calls" => sorted})
-  end
-
-  defp build_tool_calls_from_completed_response(
-         %{raw: %{"response" => %{"output" => output_items}}},
-         :open_ai_responses
-       )
-       when is_list(output_items) do
-    alias LlmComposer.FunctionCallExtractors
-
-    tool_calls =
-      output_items
-      |> Enum.filter(&(Map.get(&1, "type") == "function_call"))
-      |> Enum.map(fn item ->
-        %{
-          "id" => item["call_id"] || item["id"],
-          "type" => "function",
-          "function" => %{
-            "name" => item["name"],
-            "arguments" => item["arguments"] || "{}"
-          }
-        }
-      end)
-
-    case tool_calls do
-      [] -> nil
-      calls -> FunctionCallExtractors.from_tool_calls(%{"tool_calls" => calls})
-    end
-  end
-
-  defp build_tool_calls_from_completed_response(_final_chunk, _provider), do: nil
-
-  defp accumulate_tool_call_delta(%{"index" => index} = delta, acc) when is_integer(index) do
-    key = {:index, index}
-    order = tool_call_order(acc, key, index)
-
-    updated =
-      acc.tool_calls_acc
-      |> Map.get(key, %{})
-      |> merge_tool_call_delta(%{
-        "id" => delta["id"],
-        "type" => delta["type"],
-        "index" => index,
-        "_order" => order,
-        "function" => %{
-          "name" => get_in(delta, ["function", "name"]),
-          "arguments" => get_in(delta, ["function", "arguments"])
-        }
-      })
-
-    put_tool_call(acc, key, updated)
-  end
-
-  defp accumulate_tool_call_delta(
-         %{"type" => "function_call_started", "call_id" => call_id} = delta,
-         acc
-       )
-       when is_binary(call_id) and call_id != "" do
-    key = {:call_id, call_id}
-    order = tool_call_order(acc, key)
-
-    updated =
-      acc.tool_calls_acc
-      |> Map.get(key, %{})
-      |> merge_tool_call_delta(%{
-        "id" => call_id,
-        "type" => "function",
-        "_order" => order,
-        "function" => %{
-          "name" => delta["name"],
-          "arguments" => nil
-        }
-      })
-
-    put_tool_call(acc, key, updated)
-  end
-
-  defp accumulate_tool_call_delta(
-         %{"type" => "function_call_arguments_delta", "call_id" => call_id} = delta,
-         acc
-       )
-       when is_binary(call_id) and call_id != "" do
-    key = {:call_id, call_id}
-    order = tool_call_order(acc, key)
-
-    updated =
-      acc.tool_calls_acc
-      |> Map.get(key, %{})
-      |> merge_tool_call_delta(%{
-        "id" => call_id,
-        "type" => "function",
-        "_order" => order,
-        "function" => %{
-          "name" => nil,
-          "arguments" => delta["arguments_delta"]
-        }
-      })
-
-    put_tool_call(acc, key, updated)
-  end
-
-  defp accumulate_tool_call_delta(_delta, acc), do: acc
-
-  defp merge_tool_call_delta(existing, incoming) do
-    existing_function = Map.get(existing, "function", %{})
-    incoming_function = Map.get(incoming, "function", %{})
-
-    %{
-      "id" => incoming["id"] || existing["id"],
-      "type" => incoming["type"] || existing["type"] || "function",
-      "function" => %{
-        "name" => incoming_function["name"] || existing_function["name"],
-        "arguments" =>
-          (existing_function["arguments"] || "") <> (incoming_function["arguments"] || "")
-      },
-      "_order" => incoming["_order"] || existing["_order"]
-    }
-    |> maybe_put_index(incoming["index"] || existing["index"])
-  end
-
-  defp tool_call_order(acc, key, fallback_order \\ nil) do
-    case Map.get(acc.tool_calls_acc, key) do
-      %{"_order" => order} ->
-        order
-
-      _ ->
-        fallback_order || acc.tool_call_order + 1
-    end
-  end
-
-  defp put_tool_call(acc, key, tool_call) do
-    next_order =
-      case Map.get(acc.tool_calls_acc, key) do
-        nil -> max(acc.tool_call_order, tool_call["_order"] || acc.tool_call_order)
-        _existing -> acc.tool_call_order
-      end
-
-    %{
-      acc
-      | tool_calls_acc: Map.put(acc.tool_calls_acc, key, tool_call),
-        tool_call_order: next_order
-    }
-  end
-
-  defp stream_tool_call_sort_key(tool_call) do
-    case tool_call["index"] do
-      index when is_integer(index) -> {0, index}
-      _ -> {1, tool_call["_order"] || 0}
-    end
-  end
-
-  defp maybe_put_index(tool_call, nil), do: tool_call
-  defp maybe_put_index(tool_call, index), do: Map.put(tool_call, "index", index)
-
-  defp execute_tool_calls(chat, calls, functions) do
-    Enum.map(calls, fn %LlmComposer.FunctionCall{} = function_call ->
-      broadcast(chat.id, {:tool_call_start, chat, function_call.name})
-
-      executed_call =
-        case FunctionExecutor.execute(function_call, functions) do
-          {:ok, executed} ->
-            executed
-
-          {:error, reason} ->
-            Logger.warning(
-              "[chat_live] tool_error chat_id=#{chat.id} name=#{function_call.name} reason=#{inspect(reason)}"
-            )
-
-            %LlmComposer.FunctionCall{
-              function_call
-              | result: "Error: #{format_tool_error(reason)}"
-            }
-        end
-
-      Logger.debug(
-        "[chat_live] tool_result chat_id=#{chat.id} name=#{function_call.name} result=#{inspect(executed_call.result)}"
-      )
-
-      broadcast(chat.id, {:tool_call_end, chat, function_call.name})
-      executed_call
+      _chunk, acc ->
+        acc
     end)
   end
 
-  defp format_tool_error({:invalid_arguments, reason}), do: "invalid arguments (#{reason})"
-  defp format_tool_error({:execution_failed, reason}), do: "execution failed (#{reason})"
-  defp format_tool_error(:function_not_found), do: "unknown tool"
-  defp format_tool_error(reason), do: inspect(reason)
+  # ponytail: in stream mode `LlmComposer.Agent` reassembles the turn into a synthetic response
+  # that carries no `raw`, `response_id` or `reasoning_details`, so those persist as nil (and
+  # openai_responses follow-ups lose `previous_response_id` reuse). Fix belongs in llm_composer.
+  defp agent_message_attrs(%AgentResult{response: response, function_calls: calls}, cost_info) do
+    response = %{response | cost_info: cost_info}
+    main = response.main_response
 
-  defp tool_call_entry(%{id: id, name: name, arguments: arguments, result: result}) do
     %{
-      "id" => id,
-      "name" => name,
-      "arguments" => arguments,
-      "result" => to_string(result)
+      role: "assistant",
+      content: main.content,
+      reasoning: main.reasoning,
+      reasoning_details: main.reasoning_details,
+      raw_response: response.raw,
+      tool_calls: Enum.map(calls, &tool_call_attrs/1)
+    }
+    |> Map.merge(Usage.cost_tracking_attrs(response))
+  end
+
+  defp tool_call_attrs(call) do
+    %{
+      "id" => call.id,
+      "name" => call.name,
+      "arguments" => call.arguments,
+      "result" => to_string(call.result)
     }
   end
 
-  defp build_reasoning_steps(reasoning, reasoning_details, tool_calls_history) do
-    []
-    |> maybe_add_reasoning_step(reasoning, reasoning_details)
-    |> maybe_add_tool_steps(tool_calls_history)
-  end
+  defp save_and_broadcast(chat, attrs, event) do
+    case Chats.create_message(chat, attrs) do
+      {:ok, assistant_msg} ->
+        broadcast(chat.id, {event, chat, assistant_msg})
 
-  defp maybe_add_reasoning_step(steps, reasoning, reasoning_details) do
-    case reasoning_content(reasoning, reasoning_details) do
-      nil ->
-        steps
+      {:error, changeset} ->
+        Logger.error(
+          "[chat_live] failed to save assistant message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
+        )
 
-      content ->
-        steps ++ [%{"type" => "reasoning", "content" => content}]
+        broadcast(chat.id, save_failure(chat, event))
     end
   end
 
-  defp maybe_add_tool_steps(steps, tool_calls_history) when tool_calls_history in [nil, []],
-    do: steps
-
-  defp maybe_add_tool_steps(steps, tool_calls_history) do
-    steps ++
-      Enum.map(tool_calls_history, fn %{"name" => name} ->
-        %{"type" => "tool_call", "tool_name" => name, "status" => "completed"}
-      end)
-  end
-
-  defp empty_trace_acc do
-    %{
-      tool_calls_history: [],
-      reasoning_steps: [],
-      reasoning_details_history: [],
-      usage_breakdown: []
-    }
-  end
-
-  defp accumulate_trace(trace_acc, reasoning, reasoning_details, tool_calls, usage_entry) do
-    %{
-      tool_calls_history: trace_acc.tool_calls_history ++ tool_calls,
-      reasoning_steps:
-        trace_acc.reasoning_steps ++
-          build_reasoning_steps(reasoning, reasoning_details, tool_calls),
-      reasoning_details_history:
-        trace_acc.reasoning_details_history ++ List.wrap(reasoning_details),
-      usage_breakdown: trace_acc.usage_breakdown ++ List.wrap(usage_entry)
-    }
-  end
-
-  defp next_iteration(trace_acc), do: length(trace_acc.usage_breakdown) + 1
-
-  defp trace_reasoning_for_tool_iteration(reasoning, reasoning_details, content) do
-    case reasoning_content(reasoning, reasoning_details) do
-      nil -> blank_to_nil(content)
-      _content -> reasoning
-    end
-  end
-
-  defp reasoning_content(reasoning, _reasoning_details) when reasoning not in [nil, ""],
-    do: reasoning
-
-  defp reasoning_content(_reasoning, reasoning_details) do
-    reasoning_details
-    |> List.wrap()
-    |> Enum.map(&reasoning_detail_text/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-    |> blank_to_nil()
-  end
-
-  defp reasoning_detail_text(%{"text" => text}) when is_binary(text), do: text
-  defp reasoning_detail_text(%{text: text}) when is_binary(text), do: text
-  defp reasoning_detail_text(%{"summary" => summary}) when is_binary(summary), do: summary
-  defp reasoning_detail_text(%{summary: summary}) when is_binary(summary), do: summary
-  defp reasoning_detail_text(%{"content" => content}) when is_binary(content), do: content
-  defp reasoning_detail_text(%{content: content}) when is_binary(content), do: content
-  defp reasoning_detail_text(_detail), do: ""
-
-  defp blank_to_nil(nil), do: nil
-  defp blank_to_nil(""), do: nil
-  defp blank_to_nil(value), do: value
-
-  defp blank_list_to_nil(nil), do: nil
-  defp blank_list_to_nil([]), do: nil
-  defp blank_list_to_nil(value), do: value
-
-  defp provider_module("openai"), do: LlmComposer.Providers.OpenAI
-  defp provider_module("openai_responses"), do: LlmComposer.Providers.OpenAIResponses
-  defp provider_module("openrouter"), do: LlmComposer.Providers.OpenRouter
-  defp provider_module("ollama"), do: LlmComposer.Providers.Ollama
-  defp provider_module("google"), do: LlmComposer.Providers.Google
+  defp save_failure(chat, :stream_done), do: {:stream_save_failed, chat}
+  defp save_failure(chat, :llm_done), do: {:llm_response, chat, {:error, :save_failed}}
 
   defp llm_runner do
     Application.get_env(:livellm, :llm_runner, Livellm.Chats.LlmRunner)

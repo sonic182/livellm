@@ -138,13 +138,23 @@
               input_class="cursor-pointer"
             />
 
-            <.text_input
+            <.combobox_input
               id="model-input"
               name="model"
               value={@selected_model}
               placeholder="Model..."
               phx-debounce="300"
-              phx-hook=".AutosizeInput"
+              options={@model_options}
+              open={@model_list_open}
+              loading={@models_loading}
+              highlight={@model_highlight}
+              empty_message={
+                if @models == [], do: "No models from provider", else: "No matching model"
+              }
+              on_open="open_model_list"
+              on_close="close_model_list"
+              on_select="select_model"
+              on_key="model_key"
               density={:compact}
               class="w-full max-w-full sm:w-auto"
               input_class="max-w-full min-w-[9rem] sm:min-w-16"
@@ -186,34 +196,6 @@
           </button>
         <% end %>
       </header>
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".AutosizeInput">
-        export default {
-          mounted() {
-            this._sizer = document.createElement("span")
-            this._sizer.style.cssText =
-              "position:fixed;top:0;left:0;visibility:hidden;white-space:pre;pointer-events:none"
-            document.body.appendChild(this._sizer)
-            this._resize()
-            this.el.addEventListener("input", () => this._resize())
-          },
-          updated() {
-            this._resize()
-          },
-          destroyed() {
-            this._sizer.remove()
-          },
-          _resize() {
-            const s = getComputedStyle(this.el)
-            this._sizer.style.font = s.font
-            this._sizer.style.letterSpacing = s.letterSpacing
-            this._sizer.style.padding = s.padding
-            this._sizer.textContent = this.el.value || this.el.placeholder || ""
-            const minPx = parseFloat(s.minWidth) || 64
-            this.el.style.width = Math.max(this._sizer.offsetWidth + 2, minPx) + "px"
-          }
-        }
-      </script>
-
       <%!-- Messages scroll area --%>
       <div
         id="messages-scroll"

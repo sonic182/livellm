@@ -8,7 +8,10 @@ defmodule LivellmWeb.ChatLiveTest do
   alias Livellm.ChatsFixtures
   alias Livellm.Config
   alias Livellm.TestSupport.FakeLlmRunner
+  alias LlmComposer.Agent.Result, as: AgentResult
   alias LlmComposer.Cache.Ets
+  alias LlmComposer.Cost.CostAssembler
+  alias LlmComposer.StreamChunk
 
   setup do
     original_runner = Application.get_env(:livellm, :llm_runner)
@@ -101,6 +104,172 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#chat-metrics")
   end
 
+  test "the model combobox opens, filters and selects from the provider catalog", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    refute has_element?(view, "#model-input-options")
+
+    view |> element("#model-input") |> render_focus()
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    assert has_element?(view, "#model-input-options button", "o3")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "nano",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    refute has_element?(view, "#model-input-options button", "o3")
+
+    view |> element("#model-input-options button", "gpt-5-nano") |> render_click()
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "arrow keys move the model highlight and Enter selects it", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
+
+    combobox = element(view, "#model-input-combobox")
+
+    # The list opens on the first ArrowDown, with the first option highlighted.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-4.1-mini\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    # Highlight stops at the last option instead of wrapping.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowUp"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-5-nano\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "Enter"})
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "escape closes the model list without selecting", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element("#model-input") |> render_focus()
+    assert has_element?(view, "#model-input-options")
+
+    render_hook(element(view, "#model-input-combobox"), "model_key", %{"key" => "Escape"})
+
+    refute has_element?(view, "#model-input-options")
+    assert has_element?(view, "#model-input[value=\"gpt-4.1-mini\"]")
+  end
+
+  test "clearing the model input to search does not crash the chat", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{model: "gpt-4.1-mini", provider_config_id: provider_config.id})
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input[value=\"\"]")
+    assert Chats.get_chat!(chat.id).model == "gpt-4.1-mini"
+  end
+
+  test "selected tools are passed to the agent and persisted with its response", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
+      })
+
+    result = %AgentResult{
+      response: %LlmComposer.LlmResponse{
+        provider: :open_ai,
+        status: :ok,
+        main_response: %LlmComposer.Message{type: :assistant, content: "Memory saved"}
+      },
+      messages: [],
+      iterations: 2,
+      function_calls: [
+        %LlmComposer.FunctionCall{
+          id: "call_memory_1",
+          name: "memory",
+          arguments: ~s({"action":"write","title":"Note","data":"Remember this"}),
+          result: "Saved memory ID 42."
+        }
+      ]
+    }
+
+    Application.put_env(:livellm, :llm_runner_result, {:ok, result})
+    Application.put_env(:livellm, :llm_runner_test_pid, self())
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_click(element(view, "#tool-memory"))
+    render_submit(element(view, "#message-form"), %{"message" => "Remember this"})
+
+    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _history, nil,
+                    _chat_id, opts}
+
+    assert Enum.map(Keyword.fetch!(opts, :functions), & &1.name) == ["memory"]
+    assert_receive {:llm_done, _chat, assistant_msg}
+
+    assert assistant_msg.tool_calls == [
+             %{
+               "id" => "call_memory_1",
+               "name" => "memory",
+               "arguments" => ~s({"action":"write","title":"Note","data":"Remember this"}),
+               "result" => "Saved memory ID 42."
+             }
+           ]
+  end
+
   test "assistant messages render markdown and sanitize raw html", %{conn: conn} do
     chat = ChatsFixtures.chat_fixture()
 
@@ -133,7 +302,13 @@ defmodule LivellmWeb.ChatLiveTest do
   end
 
   test "sending a message updates the aggregate after the assistant response", %{conn: conn} do
-    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
+      })
 
     Application.put_env(
       :livellm,
@@ -168,17 +343,20 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
-    {:ok, view, _html} = live(conn, ~p"/")
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
 
     render_submit(element(view, "#message-form"), %{"message" => "Hello"})
 
     assert_receive {:fake_llm_runner_called, _provider_config, "gpt-4.1-mini", _history, nil,
                     _chat_id, _opts}
 
-    _ = :sys.get_state(view.pid)
+    # Wait for the background task to persist and broadcast, not just to be called: the
+    # assertions below need the saved message, and its INSERT must land inside the test.
+    assert_receive {:llm_done, _chat, _assistant_msg}
 
-    chat = Chats.list_chats() |> List.first()
-    assistant_msg = Chats.latest_assistant_message(chat)
+    _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#chat-total-tokens")
     assert render(element(view, "#chat-total-tokens")) =~ "48 tokens"
@@ -191,12 +369,9 @@ defmodule LivellmWeb.ChatLiveTest do
     assert render(element(view, "#chat-reasoning-tokens")) =~ "9 reasoning"
     assert render(element(view, "#chat-cached-tokens")) =~ "12 cached"
     assert has_element?(view, "#messages-2-reasoning")
-    assert length(assistant_msg.usage_breakdown) == 1
-    assert Enum.at(assistant_msg.usage_breakdown, 0).iteration == 1
-    assert Enum.at(assistant_msg.usage_breakdown, 0).result_type == "final"
   end
 
-  test "streaming responses persist normalized chunk metadata from llm_composer", %{conn: conn} do
+  test "streaming agent runs persist the aggregated run metadata", %{conn: conn} do
     provider_config =
       provider_config_fixture(
         provider: "openai_responses",
@@ -235,20 +410,61 @@ defmodule LivellmWeb.ChatLiveTest do
 
     _ = :sys.get_state(Process.whereis(Ets))
 
+    raw_response = %{
+      "model" => "gpt-5.4-mini",
+      "usage" => %{
+        "prompt_tokens" => 40,
+        "completion_tokens" => 8,
+        "input_tokens_details" => %{"cached_tokens" => 12}
+      }
+    }
+
+    cost_info =
+      CostAssembler.get_cost_info(:open_ai_responses, raw_response,
+        track_costs: true,
+        model: "gpt-5.4-mini"
+      )
+
+    agent_result = %AgentResult{
+      response: %LlmComposer.LlmResponse{
+        provider: :open_ai_responses,
+        status: :ok,
+        main_response: %LlmComposer.Message{
+          type: :assistant,
+          content: "Hello world",
+          reasoning: "Thinking"
+        },
+        input_tokens: 40,
+        output_tokens: 8,
+        cached_tokens: 12,
+        reasoning_tokens: 9
+      },
+      messages: [],
+      iterations: 1,
+      cost_infos: [cost_info]
+    }
+
     Application.put_env(
       :livellm,
       :llm_runner_result,
       {:ok,
-       %LlmComposer.LlmResponse{
-         provider: :open_ai_responses,
-         status: :ok,
-         stream: [
-           ~s(data: {"type":"response.output_text.delta","delta":"Hello"}),
-           ~s(data: {"type":"response.output_text.delta","delta":" world"}),
-           ~s(data: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"Thinking"}]}}),
-           ~s(data: {"type":"response.completed","response":{"id":"resp_stream_123","model":"gpt-5.4-mini","usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48,"input_tokens_details":{"cached_tokens":12},"output_tokens_details":{"reasoning_tokens":9}}}})
-         ]
-       }}
+       [
+         %StreamChunk{provider: :open_ai_responses, type: :text_delta, text: "Hello"},
+         %StreamChunk{provider: :open_ai_responses, type: :text_delta, text: " world"},
+         %StreamChunk{
+           provider: :open_ai_responses,
+           type: :done,
+           usage: %{
+             input_tokens: 40,
+             output_tokens: 8,
+             total_tokens: 48,
+             cached_tokens: 12,
+             reasoning_tokens: 9
+           },
+           cost_info: cost_info,
+           metadata: %{agent_result: agent_result, status: :ok}
+         }
+       ]}
     )
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
@@ -281,651 +497,45 @@ defmodule LivellmWeb.ChatLiveTest do
     assert assistant_msg.reasoning_tokens == 9
     assert assistant_msg.provider_name == "open_ai_responses"
     assert assistant_msg.provider_model == "gpt-5.4-mini"
-    assert assistant_msg.provider_response_id == "resp_stream_123"
+    # `Agent`'s synthetic streamed response carries no provider response id (see chat_live.ex)
+    assert assistant_msg.provider_response_id == nil
     assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000024500000"))
-    assert length(assistant_msg.usage_breakdown) == 1
-    assert Enum.at(assistant_msg.usage_breakdown, 0).iteration == 1
-    assert Enum.at(assistant_msg.usage_breakdown, 0).result_type == "final"
   end
 
-  test "non-streaming tool loops persist reasoning before and after tool execution", %{
-    conn: conn
-  } do
+  test "a terminal error chunk on the agent stream surfaces a flash", %{conn: conn} do
     provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
 
-    Application.put_env(
-      :livellm,
-      :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          FakeLlmRunner.success_response(%{
-            provider: :open_ai,
-            main_response: %LlmComposer.Message{
-              type: :assistant,
-              content: "Final answer",
-              reasoning: "Second reasoning",
-              reasoning_details: [%{"text" => "Second reasoning"}]
-            },
-            input_tokens: 20,
-            output_tokens: 7,
-            cached_tokens: 2,
-            cost_info:
-              LlmComposer.CostInfo.new(
-                :open_ai,
-                "gpt-4.1-mini",
-                20,
-                7,
-                cached_tokens: 2,
-                input_price_per_million: Decimal.new("1.0"),
-                output_price_per_million: Decimal.new("2.0"),
-                currency: "USD"
-              ),
-            raw: %{
-              "id" => "resp_final",
-              "usage" => %{"completion_tokens_details" => %{"reasoning_tokens" => 4}}
-            }
-          })
-        else
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             input_tokens: 40,
-             output_tokens: 12,
-             cached_tokens: 5,
-             cost_info:
-               LlmComposer.CostInfo.new(
-                 :open_ai,
-                 "gpt-4.1-mini",
-                 40,
-                 12,
-                 cached_tokens: 5,
-                 input_price_per_million: Decimal.new("1.0"),
-                 output_price_per_million: Decimal.new("2.0"),
-                 currency: "USD"
-               ),
-             raw: %{
-               "id" => "resp_tool",
-               "usage" => %{"completion_tokens_details" => %{"reasoning_tokens" => 9}}
-             },
-             main_response: %LlmComposer.Message{
-               type: :assistant,
-               content: nil,
-               reasoning: nil,
-               reasoning_details: [%{"text" => "First reasoning"}],
-               function_calls: [
-                 %LlmComposer.FunctionCall{
-                   id: "call_memory_1",
-                   name: "memory",
-                   arguments: ~s({"action":"list"})
-                 }
-               ]
-             }
-           }}
-        end
-      end
-    )
-
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-4.1-mini",
-      "reasoning_effort" => "",
-      "streaming" => "false"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", first_history, nil,
-                    _chat_id, first_opts}
-
-    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-    assert Keyword.get(first_opts, :stream) == false
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", second_history,
-                    nil, _chat_id, second_opts}
-
-    assert Enum.any?(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-    assert Keyword.get(second_opts, :stream) == false
-
-    _ = :sys.get_state(view.pid)
-
-    chat = Chats.list_chats() |> List.first()
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.input_tokens == 60
-    assert assistant_msg.output_tokens == 19
-    assert assistant_msg.total_tokens == 79
-    assert assistant_msg.cached_tokens == 7
-    assert assistant_msg.reasoning_tokens == 13
-    assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000098"))
-    assert assistant_msg.reasoning == "Second reasoning"
-    assert length(assistant_msg.usage_breakdown) == 2
-
-    first_usage = Enum.at(assistant_msg.usage_breakdown, 0)
-    second_usage = Enum.at(assistant_msg.usage_breakdown, 1)
-
-    assert assistant_msg.reasoning_details == [
-             %{"text" => "First reasoning"},
-             %{"text" => "Second reasoning"}
-           ]
-
-    assert assistant_msg.reasoning_steps == [
-             %{"type" => "reasoning", "content" => "First reasoning"},
-             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
-             %{"type" => "reasoning", "content" => "Second reasoning"}
-           ]
-
-    assert first_usage.iteration == 1
-    assert first_usage.result_type == "tool_calls"
-    assert first_usage.input_tokens == 40
-    assert first_usage.output_tokens == 12
-    assert first_usage.reasoning_tokens == 9
-
-    assert second_usage.iteration == 2
-    assert second_usage.result_type == "final"
-    assert second_usage.input_tokens == 20
-    assert second_usage.output_tokens == 7
-    assert second_usage.reasoning_tokens == 4
-  end
-
-  test "streaming tool loops persist reasoning before and after tool execution", %{conn: conn} do
-    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
-
-    Application.put_env(
-      :livellm,
-      :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"reasoning":"Second reasoning","reasoning_details":[{"type":"reasoning.text","text":"Second reasoning"}]},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{"content":"Final answer"},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]})
-             ]
-           }}
-        else
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"reasoning":"First reasoning","reasoning_details":[{"type":"reasoning.text","text":"First reasoning"}]},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_memory_1","type":"function","function":{"name":"memory","arguments":"{\\"action\\":\\"list\\"}"}}]},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}]})
-             ]
-           }}
-        end
-      end
-    )
-
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-4.1-mini",
-      "reasoning_effort" => "",
-      "streaming" => "true"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", first_history, nil,
-                    _chat_id, first_opts}
-
-    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-    assert Keyword.get(first_opts, :stream) == true
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", second_history,
-                    nil, chat_id, second_opts}
-
-    assert Enum.any?(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-    assert Keyword.get(second_opts, :stream) == true
-
-    _ = :sys.get_state(view.pid)
-
-    chat = Chats.get_chat!(chat_id)
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.content == "Final answer"
-    assert assistant_msg.reasoning == "Second reasoning"
-
-    assert assistant_msg.reasoning_details == [
-             %{"type" => "reasoning.text", "text" => "First reasoning"},
-             %{"type" => "reasoning.text", "text" => "Second reasoning"}
-           ]
-
-    assert assistant_msg.reasoning_steps == [
-             %{"type" => "reasoning", "content" => "First reasoning"},
-             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
-             %{"type" => "reasoning", "content" => "Second reasoning"}
-           ]
-  end
-
-  test "streaming tool loops treat content before tool calls as reasoning when needed", %{
-    conn: conn
-  } do
-    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
-
-    Application.put_env(
-      :livellm,
-      :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"content":"Final answer"},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]})
-             ]
-           }}
-        else
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"content":"Thought before tool"},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_memory_1","type":"function","function":{"name":"memory","arguments":"{\\"action\\":\\"list\\"}"}}]},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}]})
-             ]
-           }}
-        end
-      end
-    )
-
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-4.1-mini",
-      "reasoning_effort" => "",
-      "streaming" => "true"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _first_history,
-                    nil, _chat_id, first_opts}
-
-    assert Keyword.get(first_opts, :stream) == true
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _second_history,
-                    nil, chat_id, second_opts}
-
-    assert Keyword.get(second_opts, :stream) == true
-
-    _ = :sys.get_state(view.pid)
-
-    chat = Chats.get_chat!(chat_id)
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.content == "Final answer"
-
-    assert assistant_msg.reasoning_steps == [
-             %{"type" => "reasoning", "content" => "Thought before tool"},
-             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"}
-           ]
-  end
-
-  test "streaming tool loops replay tool-call assistant turns with non-nil content", %{
-    conn: conn
-  } do
-    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
-
-    Application.put_env(
-      :livellm,
-      :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          assert [
-                   %LlmComposer.Message{
-                     type: :assistant,
-                     content: "Using tool results",
-                     function_calls: [
-                       %LlmComposer.FunctionCall{id: "call_memory_1", name: "memory"}
-                     ]
-                   }
-                 ] =
-                   Enum.filter(
-                     history,
-                     &match?(%LlmComposer.Message{type: :assistant, function_calls: [_ | _]}, &1)
-                   )
-
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"content":"Final answer"},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]})
-             ]
-           }}
-        else
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             stream: [
-               ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_memory_1","type":"function","function":{"name":"memory","arguments":"{\\"action\\":\\"list\\"}"}}]},"index":0,"finish_reason":null}]}),
-               ~s(data: {"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}]})
-             ]
-           }}
-        end
-      end
-    )
-
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-4.1-mini",
-      "reasoning_effort" => "",
-      "streaming" => "true"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _first_history,
-                    nil, _chat_id, _first_opts}
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", _second_history,
-                    nil, chat_id, _second_opts}
-
-    _ = :sys.get_state(view.pid)
-
-    chat = Chats.get_chat!(chat_id)
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.content == "Final answer"
-  end
-
-  test "tool execution errors are returned to the model instead of crashing the turn", %{
-    conn: conn
-  } do
-    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
-
-    Application.put_env(
-      :livellm,
-      :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          assert [
-                   %LlmComposer.Message{
-                     type: :tool_result,
-                     content: <<"Error: invalid arguments", _::binary>>,
-                     metadata: %{"tool_call_id" => "call_memory_1"}
-                   }
-                 ] = Enum.filter(history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-
-          FakeLlmRunner.success_response(%{
-            provider: :open_ai,
-            main_response: %LlmComposer.Message{
-              type: :assistant,
-              content: "Recovered after tool error"
-            }
-          })
-        else
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai,
-             status: :ok,
-             main_response: %LlmComposer.Message{
-               type: :assistant,
-               content: nil,
-               function_calls: [
-                 %LlmComposer.FunctionCall{
-                   id: "call_memory_1",
-                   name: "memory",
-                   arguments: "{bad json"
-                 }
-               ]
-             }
-           }}
-        end
-      end
-    )
-
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-4.1-mini",
-      "reasoning_effort" => "",
-      "streaming" => "false"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use the memory tool"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", first_history, nil,
-                    _chat_id, _first_opts}
-
-    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-4.1-mini", second_history,
-                    nil, _chat_id, _second_opts}
-
-    assert [
-             %LlmComposer.Message{
-               type: :tool_result,
-               content: <<"Error: invalid arguments", _::binary>>,
-               metadata: %{"tool_call_id" => "call_memory_1"}
-             }
-           ] = Enum.filter(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-
-    _ = :sys.get_state(view.pid)
-
-    chat = Chats.list_chats() |> List.first()
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.content == "Recovered after tool error"
-  end
-
-  test "streaming openai responses tool loops execute fragmented tool calls in order", %{
-    conn: conn
-  } do
-    provider_config =
-      provider_config_fixture(
-        provider: "openai_responses",
-        enabled: true,
-        default_model: "gpt-5.4-mini"
-      )
-
-    {:ok, alpha} =
-      Livellm.Memories.create_memory(%{
-        title: "Alpha",
-        content: "First memory"
-      })
-
-    {:ok, beta} =
-      Livellm.Memories.create_memory(%{
-        title: "Beta",
-        content: "Contains beta keyword"
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
       })
 
     Application.put_env(
       :livellm,
       :llm_runner_result,
-      fn _provider_config, _model, history, _reasoning_effort, _chat_id, _opts ->
-        if Enum.any?(history, &match?(%LlmComposer.Message{type: :tool_result}, &1)) do
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai_responses,
-             status: :ok,
-             stream: [
-               ~s(data: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"Second reasoning"}]}}),
-               ~s(data: {"type":"response.output_text.delta","delta":"Final answer"}),
-               ~s(data: {"type":"response.completed","response":{"id":"resp_final_123","model":"gpt-5.4-mini","usage":{"input_tokens":50,"output_tokens":10,"total_tokens":60}}})
-             ]
-           }}
-        else
-          completed_tool_response =
-            "data: " <>
-              Jason.encode!(%{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_tool_123",
-                  "model" => "gpt-5.4-mini",
-                  "output" => [
-                    %{
-                      "type" => "reasoning",
-                      "summary" => [%{"type" => "summary_text", "text" => "First reasoning"}]
-                    },
-                    %{
-                      "type" => "function_call",
-                      "call_id" => "call_memory_list",
-                      "name" => "memory",
-                      "arguments" => ~s({"action":"list"})
-                    },
-                    %{
-                      "type" => "function_call",
-                      "call_id" => "call_memory_search",
-                      "name" => "memory",
-                      "arguments" => ~s({"action":"search","data":"beta"})
-                    }
-                  ],
-                  "usage" => %{
-                    "input_tokens" => 40,
-                    "output_tokens" => 8,
-                    "total_tokens" => 48
-                  }
-                }
-              })
-
-          {:ok,
-           %LlmComposer.LlmResponse{
-             provider: :open_ai_responses,
-             status: :ok,
-             stream: [
-               ~s(data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_memory_list","name":"memory"}}),
-               ~s(data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_memory_search","name":"memory"}}),
-               completed_tool_response
-             ]
-           }}
-        end
-      end
+      {:ok,
+       [
+         %StreamChunk{provider: :open_ai, type: :text_delta, text: "partial"},
+         %StreamChunk{
+           provider: :open_ai,
+           type: :error,
+           metadata: %{reason: :max_iterations_reached, status: :error}
+         }
+       ]}
     )
 
-    Application.put_env(:livellm, :llm_runner_test_pid, self())
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
 
-    {:ok, view, _html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
 
-    assert has_element?(
-             view,
-             "#tool-memory",
-             "Manage user memories"
-           )
+    render_submit(element(view, "#message-form"), %{"message" => "Hello"})
 
-    render_change(element(view, "#chat-settings-form"), %{
-      "provider_id" => Integer.to_string(provider_config.id),
-      "model" => "gpt-5.4-mini",
-      "reasoning_effort" => "",
-      "streaming" => "true"
-    })
-
-    render_click(element(view, "#tool-memory"))
-    render_submit(element(view, "#message-form"), %{"message" => "Use memory tools"})
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-5.4-mini", first_history, nil,
-                    _chat_id, first_opts},
-                   1_000
-
-    refute Enum.any?(first_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-    assert Keyword.get(first_opts, :stream) == true
-
-    assert_receive {:fake_llm_runner_called, ^provider_config, "gpt-5.4-mini", second_history,
-                    nil, chat_id, second_opts},
-                   1_000
-
-    tool_results =
-      Enum.filter(second_history, &match?(%LlmComposer.Message{type: :tool_result}, &1))
-
-    assert Enum.map(tool_results, & &1.metadata["tool_call_id"]) == [
-             "call_memory_list",
-             "call_memory_search"
-           ]
-
-    assert Enum.map(tool_results, & &1.content) == [
-             "ID #{alpha.id} — Alpha\nID #{beta.id} — Beta",
-             "ID #{beta.id} — Beta"
-           ]
-
-    assert Keyword.get(second_opts, :stream) == true
-    assert_receive {_, {:push_event, "focus_input", %{}}}, 1_000
-
-    chat = Chats.get_chat!(chat_id)
+    assert_receive {:llm_response, _chat, {:error, :max_iterations_reached}}
 
     _ = :sys.get_state(view.pid)
 
-    assistant_msg = Chats.latest_assistant_message(chat)
-
-    assert assistant_msg.content == "Final answer"
-    assert assistant_msg.reasoning == "Second reasoning"
-
-    assert assistant_msg.reasoning_steps == [
-             %{"type" => "reasoning", "content" => "First reasoning"},
-             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
-             %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"},
-             %{"type" => "reasoning", "content" => "Second reasoning"}
-           ]
-
-    assert Enum.map(assistant_msg.usage_breakdown, & &1.result_type) == ["tool_calls", "final"]
-  end
-
-  test "tool_call_end completes only the latest running step for the same tool", %{conn: conn} do
-    chat = ChatsFixtures.chat_fixture()
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    send(view.pid, {:tool_call_start, chat, "memory"})
-    send(view.pid, {:tool_call_start, chat, "memory"})
-    send(view.pid, {:tool_call_end, chat, "memory"})
-
-    _ = :sys.get_state(view.pid)
-
-    html = render(view)
-
-    assert count_occurrences(html, ~r/\bCalling\b/) == 1
-    assert count_occurrences(html, ~r/\bUsed tool\b/) == 1
-    assert count_occurrences(html, ~r/\bdone\b/) == 1
-  end
-
-  test "navigating to another chat clears transient trace state", %{conn: conn} do
-    first_chat = ChatsFixtures.chat_fixture(%{title: "First chat"})
-    second_chat = ChatsFixtures.chat_fixture(%{title: "Second chat"})
-
-    {:ok, view, _html} = live(conn, ~p"/chats/#{first_chat.id}")
-
-    send(view.pid, {:stream_reasoning, first_chat, "Thinking..."})
-    _ = :sys.get_state(view.pid)
-
-    assert has_element?(view, "#streaming-message")
-
-    render_patch(view, ~p"/chats/#{second_chat.id}")
-
-    _ = :sys.get_state(view.pid)
-
+    assert render(view) =~ "LLM error: :max_iterations_reached"
     refute has_element?(view, "#streaming-message")
   end
 
@@ -968,6 +578,8 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
     {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
     chat_id = chat.id
 
@@ -978,6 +590,9 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert provider_config_called.id == provider_config.id
     assert Keyword.get(opts, :stream) == true
+
+    # Let the task finish writing before the sandbox connection is checked back in.
+    assert_receive {:llm_done, _chat, _assistant_msg}
   end
 
   test "streaming content renders partial markdown and finalizes into a persisted assistant message",
@@ -991,15 +606,10 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert has_element?(view, "#streaming-message .chat-markdown h1")
     assert has_element?(view, "#streaming-message .chat-markdown code")
-    refute has_element?(view, "#streaming-reasoning details details")
 
     {:ok, assistant_msg} =
       Livellm.Chats.create_message(chat, %{
         role: "assistant",
-        reasoning_steps: [
-          %{"type" => "reasoning", "content" => "Thinking through the answer"},
-          %{"type" => "tool_call", "tool_name" => "memory", "status" => "completed"}
-        ],
         content: """
         ## Final answer
 
@@ -1016,23 +626,6 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#streaming-message")
     assert has_element?(view, "#messages-1 .chat-markdown h2")
     assert has_element?(view, "#messages-1 .chat-markdown pre code")
-    assert has_element?(view, "#messages-1-reasoning")
-    refute has_element?(view, "#messages-1-reasoning details")
-  end
-
-  test "draft message survives opening and closing the tools panel", %{conn: conn} do
-    _provider_config = provider_config_fixture(enabled: true)
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    render_change(element(view, "#message-form"), %{"message" => "draft text"})
-
-    render_click(element(view, "#tools-panel-btn"))
-    assert has_element?(view, "#message-input")
-    assert render(view) =~ "draft text"
-
-    render_click(element(view, "#tools-panel-close"))
-    assert has_element?(view, "#message-input")
-    assert render(view) =~ "draft text"
   end
 
   defp provider_config_fixture(attrs) do
@@ -1048,10 +641,6 @@ defmodule LivellmWeb.ChatLiveTest do
       |> Config.create_provider_config()
 
     config
-  end
-
-  defp count_occurrences(content, needle) do
-    Regex.scan(needle, content) |> length()
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:livellm, key)

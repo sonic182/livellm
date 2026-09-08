@@ -3,11 +3,12 @@ defmodule Livellm.Chats.LlmRunner do
   Orchestrates LLM calls for chat conversations.
 
   Handles provider selection, request option building (reasoning effort,
-  prompt caching), and dispatches to the appropriate LlmComposer provider.
+  prompt caching), and dispatches to `LlmComposer.Agent.run/3`, which owns the
+  tool-calling loop and stream normalization.
   """
 
   @spec run(map() | nil, String.t(), [map()], String.t() | nil, integer(), keyword()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, LlmComposer.Agent.Result.t()} | {:ok, Enumerable.t()} | {:error, term()}
 
   def run(config, model, history, effort, chat_id, run_opts \\ [])
   def run(nil, _model, _history, _effort, _chat_id, _run_opts), do: {:error, :no_provider}
@@ -22,18 +23,20 @@ defmodule Livellm.Chats.LlmRunner do
       |> maybe_add_reasoning(config.provider, reasoning_effort)
       |> maybe_add_cache_key(config.provider, chat_id)
       |> maybe_add_previous_response_id(config, model, history)
-      |> maybe_put_stream(run_opts[:stream])
       |> maybe_put_functions(run_opts[:functions])
 
     settings = %LlmComposer.Settings{
       providers: [{provider_mod, opts}],
       system_prompt: "You are a helpful assistant.",
-      track_costs: true
+      track_costs: true,
+      stream_response: run_opts[:stream] == true
     }
 
     messages = messages_for_completion(history)
 
-    LlmComposer.run_completion(settings, messages)
+    LlmComposer.Agent.run(settings, messages,
+      telemetry_metadata: run_opts[:telemetry_metadata] || %{}
+    )
   end
 
   @doc false
@@ -62,9 +65,6 @@ defmodule Livellm.Chats.LlmRunner do
 
   defp maybe_put_url(opts, nil), do: opts
   defp maybe_put_url(opts, url), do: Keyword.put(opts, :url, url)
-
-  defp maybe_put_stream(opts, true), do: Keyword.put(opts, :stream_response, true)
-  defp maybe_put_stream(opts, _), do: opts
 
   defp maybe_put_functions(opts, [_ | _] = functions),
     do: Keyword.put(opts, :functions, functions)

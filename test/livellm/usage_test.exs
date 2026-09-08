@@ -4,7 +4,6 @@ defmodule Livellm.UsageTest do
   alias Decimal
   alias Livellm.Usage
   alias LlmComposer.CostInfo
-  alias LlmComposer.StreamChunk
 
   test "aggregate_chat_metrics sums assistant tokens and costs" do
     messages = [
@@ -64,17 +63,12 @@ defmodule Livellm.UsageTest do
     assert Usage.format_total_cost(priced_metrics) == "$0.000056"
   end
 
-  test "stream_chunk_attrs uses normalized chunk usage and cost info" do
-    chunk = %StreamChunk{
+  test "cost_tracking_attrs uses cost info over the response token fields" do
+    llm_response = %LlmComposer.LlmResponse{
       provider: :open_router,
-      type: :usage,
-      usage: %{
-        input_tokens: 30,
-        output_tokens: 472,
-        total_tokens: 502,
-        cached_tokens: nil,
-        reasoning_tokens: 128
-      },
+      input_tokens: 1,
+      output_tokens: 1,
+      reasoning_tokens: 128,
       cost_info:
         CostInfo.new(
           :open_router,
@@ -89,7 +83,7 @@ defmodule Livellm.UsageTest do
       raw: %{"id" => "chunk_123"}
     }
 
-    attrs = Usage.stream_chunk_attrs(chunk)
+    attrs = Usage.cost_tracking_attrs(llm_response)
 
     assert attrs.input_tokens == 30
     assert attrs.output_tokens == 472
@@ -102,41 +96,6 @@ defmodule Livellm.UsageTest do
     assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000009000000"))
     assert Decimal.equal?(attrs.output_cost, Decimal.new("0.0005664000000"))
     assert Decimal.equal?(attrs.total_cost, Decimal.new("0.0005754000000"))
-  end
-
-  test "stream_chunk_attrs returns nil costs when the chunk has no cost_info" do
-    chunk = %StreamChunk{
-      provider: :open_ai_responses,
-      type: :done,
-      usage: %{
-        input_tokens: 40,
-        output_tokens: 54,
-        total_tokens: 94,
-        cached_tokens: 11,
-        reasoning_tokens: 43
-      },
-      raw: %{
-        "response" => %{
-          "id" => "resp_123",
-          "model" => "gpt-5.4-mini"
-        }
-      }
-    }
-
-    attrs = Usage.stream_chunk_attrs(chunk)
-
-    assert attrs.input_tokens == 40
-    assert attrs.output_tokens == 54
-    assert attrs.total_tokens == 94
-    assert attrs.cached_tokens == 11
-    assert attrs.reasoning_tokens == 43
-    assert attrs.provider_name == "open_ai_responses"
-    assert attrs.provider_model == "gpt-5.4-mini"
-    assert attrs.provider_response_id == "resp_123"
-    assert attrs.cost_currency == nil
-    assert attrs.input_cost == nil
-    assert attrs.output_cost == nil
-    assert attrs.total_cost == nil
   end
 
   test "cost_tracking_attrs prefers normalized llm_response fields" do
@@ -162,101 +121,5 @@ defmodule Livellm.UsageTest do
     assert attrs.reasoning_tokens == 8
     assert attrs.provider_model == "gpt-5.4-mini-2026-03-17"
     assert attrs.provider_response_id == "resp_999"
-  end
-
-  test "aggregate_usage_breakdown sums usage across multiple iterations" do
-    entries = [
-      %{
-        iteration: 1,
-        result_type: "tool_calls",
-        input_tokens: 40,
-        output_tokens: 12,
-        total_tokens: 52,
-        cached_tokens: 5,
-        reasoning_tokens: 9,
-        input_cost: Decimal.new("0.000010"),
-        output_cost: Decimal.new("0.000020"),
-        total_cost: Decimal.new("0.000030"),
-        cost_currency: "USD",
-        provider_name: "open_ai",
-        provider_model: "gpt-4.1-mini",
-        provider_response_id: "resp_tool"
-      },
-      %{
-        iteration: 2,
-        result_type: "final",
-        input_tokens: 20,
-        output_tokens: 7,
-        total_tokens: 27,
-        cached_tokens: 2,
-        reasoning_tokens: 4,
-        input_cost: Decimal.new("0.000005"),
-        output_cost: Decimal.new("0.000010"),
-        total_cost: Decimal.new("0.000015"),
-        cost_currency: "USD",
-        provider_name: "open_ai",
-        provider_model: "gpt-4.1-mini",
-        provider_response_id: "resp_final"
-      }
-    ]
-
-    attrs = Usage.aggregate_usage_breakdown(entries)
-
-    assert attrs.input_tokens == 60
-    assert attrs.output_tokens == 19
-    assert attrs.total_tokens == 79
-    assert attrs.cached_tokens == 7
-    assert attrs.reasoning_tokens == 13
-    assert Decimal.equal?(attrs.input_cost, Decimal.new("0.000015"))
-    assert Decimal.equal?(attrs.output_cost, Decimal.new("0.000030"))
-    assert Decimal.equal?(attrs.total_cost, Decimal.new("0.000045"))
-    assert attrs.cost_currency == "USD"
-    assert attrs.provider_response_id == "resp_final"
-  end
-
-  test "aggregate_usage_breakdown preserves partial iterations" do
-    attrs =
-      Usage.aggregate_usage_breakdown([
-        %{
-          iteration: 1,
-          result_type: "tool_calls",
-          input_tokens: nil,
-          output_tokens: nil,
-          total_tokens: nil,
-          cached_tokens: nil,
-          reasoning_tokens: nil,
-          input_cost: nil,
-          output_cost: nil,
-          total_cost: nil,
-          cost_currency: nil,
-          provider_name: "open_ai",
-          provider_model: "gpt-4.1-mini",
-          provider_response_id: "resp_tool"
-        },
-        %{
-          iteration: 2,
-          result_type: "final",
-          input_tokens: 10,
-          output_tokens: 4,
-          total_tokens: 14,
-          cached_tokens: 1,
-          reasoning_tokens: 2,
-          input_cost: nil,
-          output_cost: nil,
-          total_cost: nil,
-          cost_currency: nil,
-          provider_name: "open_ai",
-          provider_model: "gpt-4.1-mini",
-          provider_response_id: "resp_final"
-        }
-      ])
-
-    assert attrs.input_tokens == 10
-    assert attrs.output_tokens == 4
-    assert attrs.total_tokens == 14
-    assert attrs.cached_tokens == 1
-    assert attrs.reasoning_tokens == 2
-    assert attrs.total_cost == nil
-    assert attrs.provider_response_id == "resp_final"
   end
 end
