@@ -95,31 +95,6 @@ defmodule Livellm.Usage do
     }
   end
 
-  @spec stream_chunk_attrs(LlmComposer.StreamChunk.t() | nil) :: map()
-  def stream_chunk_attrs(nil), do: %{}
-
-  def stream_chunk_attrs(chunk) do
-    cost_info = chunk.cost_info
-    usage = chunk.usage
-    input_tokens = usage && usage.input_tokens
-    output_tokens = usage && usage.output_tokens
-
-    %{
-      input_tokens: token_value(cost_info, :input_tokens, input_tokens),
-      output_tokens: token_value(cost_info, :output_tokens, output_tokens),
-      total_tokens: token_total(cost_info, input_tokens, output_tokens),
-      cached_tokens: cached_tokens(cost_info, chunk.raw, usage && Map.get(usage, :cached_tokens)),
-      reasoning_tokens: usage && Map.get(usage, :reasoning_tokens),
-      input_cost: cost_value(cost_info, :input_cost),
-      output_cost: cost_value(cost_info, :output_cost),
-      total_cost: cost_value(cost_info, :total_cost),
-      cost_currency: cost_value(cost_info, :currency),
-      provider_name: provider_name(cost_info, chunk.provider),
-      provider_model: provider_model(cost_info, chunk),
-      provider_response_id: provider_response_id(chunk)
-    }
-  end
-
   @spec format_total_tokens(chat_metrics()) :: String.t() | nil
   def format_total_tokens(%{total_tokens: total_tokens}) when total_tokens > 0 do
     "#{total_tokens} tokens"

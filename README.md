@@ -17,7 +17,8 @@ This `master` branch keeps the app focused on the simple chat demo. If you want 
 ### From `llm_composer`
 
 - **Multi-provider dispatch behind one API** — switch between OpenAI, OpenRouter, Ollama, and Google without changing the calling code
-- **Streaming** — incrementally render provider responses as they arrive using `LlmComposer.parse_stream_response/2`
+- **Agent loop** — `LlmComposer.Agent.run/3` owns the ask → tool calls → results → repeat cycle, in both streaming and non-streaming mode
+- **Streaming** — incrementally render provider responses as they arrive; the agent stream yields already-normalized `LlmComposer.StreamChunk` values
 - **Reasoning output** — capture and display reasoning tokens separately when the model supports it
 - **Reasoning-effort passthrough** — forward effort hints to providers that accept them (OpenAI Responses, OpenRouter)
 - **Token and cost tracking** — normalized usage data across providers via `LlmComposer.CostInfo`
@@ -37,8 +38,8 @@ This `master` branch keeps the app focused on the simple chat demo. If you want 
 
 1. User sends a message in LiveView (`chat_live.ex` → `handle_event("send_message", ...)`)
 2. The user message is persisted to SQLite; a `Task.Supervisor` child is spawned and the chat is marked active in `ActiveTasks`
-3. The background task calls `LlmRunner.run/1`, which builds a `LlmComposer.Settings` struct and calls `LlmComposer.run_completion/2`
-4. For streaming responses: the task iterates `LlmComposer.parse_stream_response/2` and broadcasts each `:stream_chunk` and `:stream_reasoning` via `Phoenix.PubSub`
+3. The background task calls `LlmRunner.run/6`, which builds a `LlmComposer.Settings` struct and calls `LlmComposer.Agent.run/3`
+4. For streaming responses: the task iterates the agent stream and broadcasts each `:stream_chunk` via `Phoenix.PubSub`; reasoning fragments arrive on the `[:llm_composer, :agent, :reasoning, :delta]` telemetry event and are broadcast as `:stream_reasoning`
 5. The LiveView receives broadcasts via `handle_info`, updates the message assign, and re-renders incrementally
 6. On completion, the normalized response (text, reasoning, tokens, cost, response IDs) is persisted as an assistant message, the task is cleared from `ActiveTasks`, and `:stream_done` or `:llm_done` is broadcast
 

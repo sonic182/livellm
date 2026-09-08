@@ -58,7 +58,7 @@ defmodule Livellm.MixProject do
        depth: 1},
       {:jason, "~> 1.2"},
       {:lazy_html, ">= 0.1.0", only: :test},
-      {:llm_composer, "~> 0.19.0"},
+      {:llm_composer, "~> 0.20.4"},
       {:mdex, "~> 0.11.7"},
       {:phoenix, "~> 1.8.5"},
       {:phoenix_ecto, "~> 4.5"},
