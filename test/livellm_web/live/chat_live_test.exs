@@ -250,7 +250,13 @@ defmodule LivellmWeb.ChatLiveTest do
   end
 
   test "sending a message updates the aggregate after the assistant response", %{conn: conn} do
-    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
+      })
 
     Application.put_env(
       :livellm,
@@ -285,12 +291,18 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
-    {:ok, view, _html} = live(conn, ~p"/")
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
 
     render_submit(element(view, "#message-form"), %{"message" => "Hello"})
 
     assert_receive {:fake_llm_runner_called, _provider_config, "gpt-4.1-mini", _history, nil,
                     _chat_id, _opts}
+
+    # Wait for the background task to persist and broadcast, not just to be called: the
+    # assertions below need the saved message, and its INSERT must land inside the test.
+    assert_receive {:llm_done, _chat, _assistant_msg}
 
     _ = :sys.get_state(view.pid)
 
@@ -514,6 +526,8 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
     {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
     chat_id = chat.id
 
@@ -524,6 +538,9 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert provider_config_called.id == provider_config.id
     assert Keyword.get(opts, :stream) == true
+
+    # Let the task finish writing before the sandbox connection is checked back in.
+    assert_receive {:llm_done, _chat, _assistant_msg}
   end
 
   test "streaming content renders partial markdown and finalizes into a persisted assistant message",
