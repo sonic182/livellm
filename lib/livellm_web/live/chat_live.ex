@@ -8,8 +8,11 @@ defmodule LivellmWeb.ChatLive do
   alias Livellm.Chats
   alias Livellm.Chats.ActiveTasks
   alias Livellm.Config
+  alias Livellm.Models
   alias Livellm.Usage
-  alias LlmComposer
+  alias LlmComposer.Agent.Result, as: AgentResult
+  alias LlmComposer.Agent.StreamCollector
+  alias LlmComposer.StreamChunk
 
   require Logger
 
@@ -34,6 +37,12 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
+     |> assign(:model_list_open, false)
+     |> assign(:model_query, nil)
+     |> assign(:models, [])
+     |> assign(:models_loading, false)
+     |> assign_model_options()
+     |> load_models()
      |> stream(:messages, [])}
   end
 
@@ -78,6 +87,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
+     |> assign(:model_list_open, false)
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> stream(:messages, messages, reset: true)}
   end
 
@@ -174,18 +185,11 @@ defmodule LivellmWeb.ChatLive do
     stream_mode = params["streaming"] == "true"
 
     socket =
-      if socket.assigns.chat do
-        {:ok, updated_chat} =
-          Chats.update_chat(socket.assigns.chat, %{
-            model: selected_model,
-            reasoning_effort: reasoning_effort,
-            provider_config_id: new_provider_id
-          })
-
-        assign(socket, :chat, updated_chat)
-      else
-        socket
-      end
+      maybe_update_chat(socket, %{
+        model: selected_model,
+        reasoning_effort: reasoning_effort,
+        provider_config_id: new_provider_id
+      })
 
     {:noreply,
      socket
@@ -193,6 +197,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
+     |> put_model_query(params["model"])
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> push_event("save_chat_settings", %{streaming: stream_mode})}
   end
 
@@ -203,14 +209,74 @@ defmodule LivellmWeb.ChatLive do
   end
 
   @impl true
-  def handle_info({:llm_done, _chat, assistant_msg}, socket) do
+  def handle_event("open_model_list", _params, socket) do
+    # Focusing shows the whole catalog; the query only narrows it once the user types.
+    {:noreply,
+     socket
+     |> assign(:model_list_open, true)
+     |> put_model_query(nil)}
+  end
+
+  @impl true
+  def handle_event("close_model_list", _params, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_event("select_model", %{"option" => model}, socket) do
+    {:noreply, select_model(socket, model)}
+  end
+
+  @impl true
+  def handle_event("model_key", %{"key" => "ArrowDown"}, socket) do
+    if socket.assigns.model_list_open do
+      {:noreply, move_model_highlight(socket, 1)}
+    else
+      # The first ArrowDown opens the list on its first option rather than skipping one.
+      {:noreply,
+       socket
+       |> assign(:model_list_open, true)
+       |> assign(:model_highlight, 0)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "ArrowUp"}, socket) do
+    {:noreply, move_model_highlight(socket, -1)}
+  end
+
+  def handle_event("model_key", %{"key" => "Enter"}, socket) do
+    %{model_options: options, model_highlight: highlight} = socket.assigns
+
+    case Enum.at(options, highlight) do
+      nil -> {:noreply, close_model_list(socket)}
+      model -> {:noreply, select_model(socket, model)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "Escape"}, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_async(:models, {:ok, models}, socket) do
+    {:noreply,
+     socket
+     |> assign(:models, models)
+     |> assign(:models_loading, false)
+     |> assign_model_options()}
+  end
+
+  def handle_async(:models, {:exit, reason}, socket) do
+    Logger.warning("[chat_live] model catalog fetch crashed: #{inspect(reason)}")
+    {:noreply, assign(socket, :models_loading, false)}
+  end
+
+  @impl true
+  def handle_info({:llm_done, chat, assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
-     |> assign(
-       :chat_metrics,
-       Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
-     )
+     |> assign(:chat_metrics, chat_metrics(chat))
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -220,31 +286,32 @@ defmodule LivellmWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:waiting, false)
+     |> assign(:streaming_content, nil)
+     |> assign(:streaming_reasoning, nil)
      |> put_flash(:error, "LLM error: #{inspect(reason)}")
      |> push_event("focus_input", %{})}
   end
 
   @impl true
-  def handle_info({:stream_chunk, _chat, content}, socket) do
-    {:noreply, assign(socket, :streaming_content, content)}
+  def handle_info({:stream_chunk, _chat, delta}, socket) do
+    {:noreply,
+     assign(socket, :streaming_content, (socket.assigns.streaming_content || "") <> delta)}
   end
 
   @impl true
-  def handle_info({:stream_reasoning, _chat, reasoning}, socket) do
-    {:noreply, assign(socket, :streaming_reasoning, reasoning)}
+  def handle_info({:stream_reasoning, _chat, delta}, socket) do
+    {:noreply,
+     assign(socket, :streaming_reasoning, (socket.assigns.streaming_reasoning || "") <> delta)}
   end
 
   @impl true
-  def handle_info({:stream_done, _chat, %Livellm.Chats.Message{} = assistant_msg}, socket) do
+  def handle_info({:stream_done, chat, %Livellm.Chats.Message{} = assistant_msg}, socket) do
     {:noreply,
      socket
      |> assign(:waiting, false)
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
-     |> assign(
-       :chat_metrics,
-       Usage.merge_chat_metrics(socket.assigns.chat_metrics, assistant_msg)
-     )
+     |> assign(:chat_metrics, chat_metrics(chat))
      |> stream_insert(:messages, assistant_msg)
      |> push_event("focus_input", %{})}
   end
@@ -263,6 +330,92 @@ defmodule LivellmWeb.ChatLive do
   # --- Private ---
 
   defp stream_topic(chat_id), do: "chat_stream:#{chat_id}"
+
+  defp put_model_query(socket, query) do
+    socket
+    |> assign(:model_query, query)
+    |> assign_model_options()
+  end
+
+  # The filtered list lives in an assign so Enter and the arrow keys resolve against
+  # exactly what is on screen.
+  defp assign_model_options(socket) do
+    options = Models.filter(socket.assigns.models, socket.assigns.model_query)
+
+    socket
+    |> assign(:model_options, options)
+    |> assign(:model_highlight, 0)
+  end
+
+  defp move_model_highlight(socket, step) do
+    last = length(socket.assigns.model_options) - 1
+    highlight = socket.assigns.model_highlight + step
+
+    assign(socket, :model_highlight, highlight |> max(0) |> min(max(last, 0)))
+  end
+
+  defp close_model_list(socket) do
+    socket
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp select_model(socket, model) do
+    socket
+    |> maybe_update_chat(%{model: model})
+    |> assign(:selected_model, model)
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp maybe_update_chat(%{assigns: %{chat: nil}} = socket, _attrs), do: socket
+
+  defp maybe_update_chat(socket, attrs) do
+    case Chats.update_chat(socket.assigns.chat, attrs) do
+      {:ok, chat} ->
+        assign(socket, :chat, chat)
+
+      # A blank model is transient combobox search state, not something to persist.
+      {:error, _changeset} ->
+        socket
+    end
+  end
+
+  defp load_models_if_changed(socket, previous_provider_id) do
+    if socket.assigns.selected_provider_id == previous_provider_id do
+      socket
+    else
+      load_models(socket)
+    end
+  end
+
+  defp load_models(socket) do
+    case Enum.find(
+           socket.assigns.provider_configs,
+           &(&1.id == socket.assigns.selected_provider_id)
+         ) do
+      nil ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, false)
+        |> assign_model_options()
+
+      config ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, connected?(socket))
+        |> assign_model_options()
+        |> start_async(:models, fn -> Models.list(config) end)
+    end
+  end
+
+  # Recomputed rather than merged: a finished turn can race the `push_patch` that re-aggregates
+  # the chat, and merging would then count the same message twice.
+  defp chat_metrics(chat) do
+    chat
+    |> Chats.list_messages()
+    |> Usage.aggregate_chat_metrics()
+  end
 
   defp broadcast(chat_id, message) do
     Phoenix.PubSub.broadcast(Livellm.PubSub, stream_topic(chat_id), message)
@@ -295,9 +448,11 @@ defmodule LivellmWeb.ChatLive do
   end
 
   defp run_llm_task(req, history, chat) do
+    attach_reasoning_handler(chat)
+
     req
     |> run_llm_request(history, chat.id)
-    |> handle_llm_result(chat, req)
+    |> handle_llm_result(chat)
   rescue
     error ->
       Logger.error(
@@ -306,6 +461,7 @@ defmodule LivellmWeb.ChatLive do
 
       broadcast(chat.id, {:llm_response, chat, {:error, error}})
   after
+    detach_reasoning_handler(chat)
     ActiveTasks.mark_done(chat.id)
   end
 
@@ -316,166 +472,109 @@ defmodule LivellmWeb.ChatLive do
       history,
       req.reasoning_effort,
       chat_id,
-      stream: req.stream_mode
+      stream: req.stream_mode,
+      telemetry_metadata: %{chat_id: chat_id}
     )
   end
 
-  defp handle_llm_result({:ok, %{stream: stream, provider: provider}}, chat, req)
-       when not is_nil(stream) do
-    Logger.debug("[chat_live] streaming started chat_id=#{chat.id} provider=#{provider}")
+  # `Agent` keeps reasoning off the answer stream and emits it as telemetry instead, so the
+  # live reasoning panel is fed from a run-scoped handler.
+  defp reasoning_handler_id(chat), do: {__MODULE__, :reasoning, chat.id}
 
-    final = run_stream(stream, provider, req.model, chat)
+  defp attach_reasoning_handler(chat) do
+    chat_id = chat.id
 
-    Logger.debug(
-      "[chat_live] streaming done chat_id=#{chat.id} content_length=#{String.length(final.content)} usage=#{inspect(final.final_chunk && final.final_chunk.usage)}"
+    :telemetry.attach(
+      reasoning_handler_id(chat),
+      [:llm_composer, :agent, :reasoning, :delta],
+      fn
+        _event, _measurements, %{chat_id: ^chat_id, reasoning: reasoning}, _config
+        when is_binary(reasoning) ->
+          broadcast(chat_id, {:stream_reasoning, chat, reasoning})
+
+        _event, _measurements, _metadata, _config ->
+          :ok
+      end,
+      nil
     )
+  end
 
-    case Chats.create_message(chat, build_stream_message_attrs(final)) do
-      {:ok, assistant_msg} ->
-        broadcast(chat.id, {:stream_done, chat, assistant_msg})
+  defp detach_reasoning_handler(chat) do
+    :telemetry.detach(reasoning_handler_id(chat))
+  end
 
-      {:error, changeset} ->
-        Logger.error(
-          "[chat_live] failed to save stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
-        )
+  defp handle_llm_result({:ok, %AgentResult{} = result}, chat) do
+    cost_info = StreamCollector.aggregate_cost_infos(result.cost_infos)
+    save_and_broadcast(chat, agent_message_attrs(result, cost_info), :llm_done)
+  end
 
-        broadcast(chat.id, {:stream_save_failed, chat})
+  defp handle_llm_result({:ok, stream}, chat) do
+    Logger.debug("[chat_live] streaming started chat_id=#{chat.id}")
+
+    case run_agent_stream(stream, chat) do
+      %StreamChunk{type: :done, cost_info: cost_info, metadata: %{agent_result: result}} ->
+        save_and_broadcast(chat, agent_message_attrs(result, cost_info), :stream_done)
+
+      %StreamChunk{type: :error, metadata: metadata} ->
+        broadcast(chat.id, {:llm_response, chat, {:error, metadata[:reason]}})
+
+      nil ->
+        broadcast(chat.id, {:llm_response, chat, {:error, :empty_stream}})
     end
   end
 
-  defp handle_llm_result({:ok, llm_response}, chat, _req) do
-    %{content: content, reasoning: reasoning, reasoning_details: reasoning_details} =
-      llm_response.main_response
-
-    attrs =
-      %{
-        role: "assistant",
-        content: content,
-        reasoning: reasoning,
-        reasoning_details: reasoning_details,
-        raw_response: llm_response.raw
-      }
-      |> Map.merge(Usage.cost_tracking_attrs(llm_response))
-
-    case Chats.create_message(chat, attrs) do
-      {:ok, assistant_msg} ->
-        broadcast(chat.id, {:llm_done, chat, assistant_msg})
-
-      {:error, changeset} ->
-        Logger.error(
-          "[chat_live] failed to save non-stream message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
-        )
-
-        broadcast(chat.id, {:llm_response, chat, {:error, :save_failed}})
-    end
-  end
-
-  defp handle_llm_result({:error, reason}, chat, _req) do
+  defp handle_llm_result({:error, reason}, chat) do
     broadcast(chat.id, {:llm_response, chat, {:error, reason}})
   end
 
-  defp run_stream(stream, provider, model, chat) do
-    initial_acc = %{
-      content: "",
-      reasoning: "",
-      reasoning_details: [],
-      final_chunk: nil,
-      chat: chat
+  # The agent stream carries only the final, tool-free answer plus a terminal :done/:error chunk.
+  defp run_agent_stream(stream, chat) do
+    Enum.reduce(stream, nil, fn
+      %StreamChunk{type: :text_delta, text: text}, acc when text not in [nil, ""] ->
+        broadcast(chat.id, {:stream_chunk, chat, text})
+        acc
+
+      %StreamChunk{type: type} = chunk, _acc when type in [:done, :error] ->
+        chunk
+
+      _chunk, acc ->
+        acc
+    end)
+  end
+
+  # ponytail: in stream mode `LlmComposer.Agent` reassembles the turn into a synthetic response
+  # that carries no `raw`, `response_id` or `reasoning_details`, so those persist as nil (and
+  # openai_responses follow-ups lose `previous_response_id` reuse). Fix belongs in llm_composer.
+  defp agent_message_attrs(%AgentResult{response: response}, cost_info) do
+    response = %{response | cost_info: cost_info}
+    main = response.main_response
+
+    %{
+      role: "assistant",
+      content: main.content,
+      reasoning: main.reasoning,
+      reasoning_details: main.reasoning_details,
+      raw_response: response.raw
     }
-
-    stream
-    # |> Stream.map(fn data ->
-    #   Logger.debug("[debug][stream] data=#{inspect(data)}")
-    #   data
-    # end)
-    |> LlmComposer.parse_stream_response(provider, track_costs: true, model: model)
-    |> Enum.reduce(initial_acc, &handle_stream_chunk/2)
+    |> Map.merge(Usage.cost_tracking_attrs(response))
   end
 
-  defp handle_stream_chunk(chunk, acc) do
-    acc
-    |> maybe_append_text(chunk)
-    |> maybe_append_reasoning(chunk)
-    |> maybe_capture_final_chunk(chunk)
-  end
+  defp save_and_broadcast(chat, attrs, event) do
+    case Chats.create_message(chat, attrs) do
+      {:ok, assistant_msg} ->
+        broadcast(chat.id, {event, chat, assistant_msg})
 
-  defp maybe_append_text(acc, %{text: text}) when text not in [nil, ""] do
-    new_content = acc.content <> text
+      {:error, changeset} ->
+        Logger.error(
+          "[chat_live] failed to save assistant message chat_id=#{chat.id} errors=#{inspect(changeset.errors)}"
+        )
 
-    Logger.debug("[chat_live] stream chunk chat_id=#{acc.chat.id} text=#{inspect(text)}")
-    broadcast(acc.chat.id, {:stream_chunk, acc.chat, new_content})
-
-    %{acc | content: new_content}
-  end
-
-  defp maybe_append_text(acc, _chunk), do: acc
-
-  defp maybe_append_reasoning(acc, chunk) do
-    reasoning = chunk.reasoning || ""
-    reasoning_details = chunk.reasoning_details || []
-
-    if reasoning == "" and reasoning_details == [] do
-      acc
-    else
-      new_reasoning = acc.reasoning <> reasoning
-      new_reasoning_details = acc.reasoning_details ++ reasoning_details
-
-      Logger.debug(
-        "[chat_live] stream reasoning chat_id=#{acc.chat.id} reasoning=#{inspect(chunk.reasoning)} details=#{inspect(chunk.reasoning_details)}"
-      )
-
-      broadcast(acc.chat.id, {:stream_reasoning, acc.chat, new_reasoning})
-
-      %{acc | reasoning: new_reasoning, reasoning_details: new_reasoning_details}
+        broadcast(chat.id, save_failure(chat, event))
     end
   end
 
-  defp maybe_capture_final_chunk(acc, %{type: :usage} = chunk) do
-    Logger.debug(
-      "[chat_live] stream usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
-    )
-
-    %{acc | final_chunk: chunk}
-  end
-
-  defp maybe_capture_final_chunk(acc, %{type: :done} = chunk) do
-    Logger.debug(
-      "[chat_live] stream done-with-usage chat_id=#{acc.chat.id} usage=#{inspect(chunk.usage)} raw=#{inspect(chunk.raw)}"
-    )
-
-    final_chunk =
-      if not is_nil(chunk.usage) or not is_nil(chunk.cost_info) or is_nil(acc.final_chunk) do
-        chunk
-      else
-        acc.final_chunk
-      end
-
-    %{acc | final_chunk: final_chunk}
-  end
-
-  defp maybe_capture_final_chunk(acc, %{type: type}) do
-    Logger.debug("[chat_live] stream chunk (ignored) chat_id=#{acc.chat.id} type=#{type}")
-    acc
-  end
-
-  defp build_stream_message_attrs(final) do
-    %{
-      role: "assistant",
-      content: final.content,
-      reasoning: blank_to_nil(final.reasoning),
-      reasoning_details: blank_list_to_nil(final.reasoning_details),
-      raw_response: final.final_chunk && final.final_chunk.raw
-    }
-    |> Map.merge(Usage.stream_chunk_attrs(final.final_chunk))
-  end
-
-  defp blank_to_nil(nil), do: nil
-  defp blank_to_nil(""), do: nil
-  defp blank_to_nil(value), do: value
-
-  defp blank_list_to_nil(nil), do: nil
-  defp blank_list_to_nil([]), do: nil
-  defp blank_list_to_nil(value), do: value
+  defp save_failure(chat, :stream_done), do: {:stream_save_failed, chat}
+  defp save_failure(chat, :llm_done), do: {:llm_response, chat, {:error, :save_failed}}
 
   defp llm_runner do
     Application.get_env(:livellm, :llm_runner, Livellm.Chats.LlmRunner)

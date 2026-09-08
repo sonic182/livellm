@@ -8,7 +8,10 @@ defmodule LivellmWeb.ChatLiveTest do
   alias Livellm.ChatsFixtures
   alias Livellm.Config
   alias Livellm.TestSupport.FakeLlmRunner
+  alias LlmComposer.Agent.Result, as: AgentResult
   alias LlmComposer.Cache.Ets
+  alias LlmComposer.Cost.CostAssembler
+  alias LlmComposer.StreamChunk
 
   setup do
     original_runner = Application.get_env(:livellm, :llm_runner)
@@ -101,6 +104,120 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#chat-metrics")
   end
 
+  test "the model combobox opens, filters and selects from the provider catalog", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    refute has_element?(view, "#model-input-options")
+
+    view |> element("#model-input") |> render_focus()
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    assert has_element?(view, "#model-input-options button", "o3")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "nano",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    refute has_element?(view, "#model-input-options button", "o3")
+
+    view |> element("#model-input-options button", "gpt-5-nano") |> render_click()
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "arrow keys move the model highlight and Enter selects it", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
+
+    combobox = element(view, "#model-input-combobox")
+
+    # The list opens on the first ArrowDown, with the first option highlighted.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-4.1-mini\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    # Highlight stops at the last option instead of wrapping.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowUp"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-5-nano\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "Enter"})
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "escape closes the model list without selecting", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element("#model-input") |> render_focus()
+    assert has_element?(view, "#model-input-options")
+
+    render_hook(element(view, "#model-input-combobox"), "model_key", %{"key" => "Escape"})
+
+    refute has_element?(view, "#model-input-options")
+    assert has_element?(view, "#model-input[value=\"gpt-4.1-mini\"]")
+  end
+
+  test "clearing the model input to search does not crash the chat", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{model: "gpt-4.1-mini", provider_config_id: provider_config.id})
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input[value=\"\"]")
+    assert Chats.get_chat!(chat.id).model == "gpt-4.1-mini"
+  end
+
   test "assistant messages render markdown and sanitize raw html", %{conn: conn} do
     chat = ChatsFixtures.chat_fixture()
 
@@ -133,7 +250,13 @@ defmodule LivellmWeb.ChatLiveTest do
   end
 
   test "sending a message updates the aggregate after the assistant response", %{conn: conn} do
-    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
+      })
 
     Application.put_env(
       :livellm,
@@ -168,12 +291,18 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
-    {:ok, view, _html} = live(conn, ~p"/")
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
 
     render_submit(element(view, "#message-form"), %{"message" => "Hello"})
 
     assert_receive {:fake_llm_runner_called, _provider_config, "gpt-4.1-mini", _history, nil,
                     _chat_id, _opts}
+
+    # Wait for the background task to persist and broadcast, not just to be called: the
+    # assertions below need the saved message, and its INSERT must land inside the test.
+    assert_receive {:llm_done, _chat, _assistant_msg}
 
     _ = :sys.get_state(view.pid)
 
@@ -190,7 +319,7 @@ defmodule LivellmWeb.ChatLiveTest do
     assert has_element?(view, "#messages-2-reasoning")
   end
 
-  test "streaming responses persist normalized chunk metadata from llm_composer", %{conn: conn} do
+  test "streaming agent runs persist the aggregated run metadata", %{conn: conn} do
     provider_config =
       provider_config_fixture(
         provider: "openai_responses",
@@ -229,20 +358,61 @@ defmodule LivellmWeb.ChatLiveTest do
 
     _ = :sys.get_state(Process.whereis(Ets))
 
+    raw_response = %{
+      "model" => "gpt-5.4-mini",
+      "usage" => %{
+        "prompt_tokens" => 40,
+        "completion_tokens" => 8,
+        "input_tokens_details" => %{"cached_tokens" => 12}
+      }
+    }
+
+    cost_info =
+      CostAssembler.get_cost_info(:open_ai_responses, raw_response,
+        track_costs: true,
+        model: "gpt-5.4-mini"
+      )
+
+    agent_result = %AgentResult{
+      response: %LlmComposer.LlmResponse{
+        provider: :open_ai_responses,
+        status: :ok,
+        main_response: %LlmComposer.Message{
+          type: :assistant,
+          content: "Hello world",
+          reasoning: "Thinking"
+        },
+        input_tokens: 40,
+        output_tokens: 8,
+        cached_tokens: 12,
+        reasoning_tokens: 9
+      },
+      messages: [],
+      iterations: 1,
+      cost_infos: [cost_info]
+    }
+
     Application.put_env(
       :livellm,
       :llm_runner_result,
       {:ok,
-       %LlmComposer.LlmResponse{
-         provider: :open_ai_responses,
-         status: :ok,
-         stream: [
-           ~s(data: {"type":"response.output_text.delta","delta":"Hello"}),
-           ~s(data: {"type":"response.output_text.delta","delta":" world"}),
-           ~s(data: {"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"Thinking"}]}}),
-           ~s(data: {"type":"response.completed","response":{"id":"resp_stream_123","model":"gpt-5.4-mini","usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48,"input_tokens_details":{"cached_tokens":12},"output_tokens_details":{"reasoning_tokens":9}}}})
-         ]
-       }}
+       [
+         %StreamChunk{provider: :open_ai_responses, type: :text_delta, text: "Hello"},
+         %StreamChunk{provider: :open_ai_responses, type: :text_delta, text: " world"},
+         %StreamChunk{
+           provider: :open_ai_responses,
+           type: :done,
+           usage: %{
+             input_tokens: 40,
+             output_tokens: 8,
+             total_tokens: 48,
+             cached_tokens: 12,
+             reasoning_tokens: 9
+           },
+           cost_info: cost_info,
+           metadata: %{agent_result: agent_result, status: :ok}
+         }
+       ]}
     )
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
@@ -275,8 +445,46 @@ defmodule LivellmWeb.ChatLiveTest do
     assert assistant_msg.reasoning_tokens == 9
     assert assistant_msg.provider_name == "open_ai_responses"
     assert assistant_msg.provider_model == "gpt-5.4-mini"
-    assert assistant_msg.provider_response_id == "resp_stream_123"
+    # `Agent`'s synthetic streamed response carries no provider response id (see chat_live.ex)
+    assert assistant_msg.provider_response_id == nil
     assert Decimal.equal?(assistant_msg.total_cost, Decimal.new("0.000024500000"))
+  end
+
+  test "a terminal error chunk on the agent stream surfaces a flash", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{
+        model: "gpt-4.1-mini",
+        provider_config_id: provider_config.id
+      })
+
+    Application.put_env(
+      :livellm,
+      :llm_runner_result,
+      {:ok,
+       [
+         %StreamChunk{provider: :open_ai, type: :text_delta, text: "partial"},
+         %StreamChunk{
+           provider: :open_ai,
+           type: :error,
+           metadata: %{reason: :max_iterations_reached, status: :error}
+         }
+       ]}
+    )
+
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_submit(element(view, "#message-form"), %{"message" => "Hello"})
+
+    assert_receive {:llm_response, _chat, {:error, :max_iterations_reached}}
+
+    _ = :sys.get_state(view.pid)
+
+    assert render(view) =~ "LLM error: :max_iterations_reached"
+    refute has_element?(view, "#streaming-message")
   end
 
   test "sending a follow-up openai responses message reuses previous_response_id across alias and snapshot models",
@@ -318,6 +526,8 @@ defmodule LivellmWeb.ChatLiveTest do
 
     Application.put_env(:livellm, :llm_runner_test_pid, self())
 
+    Phoenix.PubSub.subscribe(Livellm.PubSub, "chat_stream:#{chat.id}")
+
     {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
     chat_id = chat.id
 
@@ -328,6 +538,9 @@ defmodule LivellmWeb.ChatLiveTest do
 
     assert provider_config_called.id == provider_config.id
     assert Keyword.get(opts, :stream) == true
+
+    # Let the task finish writing before the sandbox connection is checked back in.
+    assert_receive {:llm_done, _chat, _assistant_msg}
   end
 
   test "streaming content renders partial markdown and finalizes into a persisted assistant message",

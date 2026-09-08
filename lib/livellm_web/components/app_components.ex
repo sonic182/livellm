@@ -99,6 +99,124 @@ defmodule LivellmWeb.AppComponents do
     """
   end
 
+  attr :id, :string, required: true
+  attr :name, :string, default: nil
+  attr :label, :string, default: nil
+  attr :hint, :string, default: nil
+  attr :value, :any, default: nil
+  attr :density, :atom, values: [:default, :compact], default: :default
+  attr :class, :any, default: nil
+  attr :input_class, :any, default: nil
+
+  attr :options, :list, required: true
+  attr :open, :boolean, default: false
+  attr :loading, :boolean, default: false
+  attr :highlight, :integer, default: 0
+  attr :empty_message, :string, default: "No matches"
+
+  attr :on_open, :string, required: true
+  attr :on_close, :string, required: true
+  attr :on_select, :string, required: true
+  attr :on_key, :string, required: true
+
+  attr :rest, :global, include: ~w(disabled form phx-debounce placeholder readonly required)
+
+  @doc """
+  Text input that doubles as a filterable option list: focusing it opens the list,
+  typing filters it (the parent owns the filtering), clicking an option selects it.
+
+  Arrow up/down move `highlight`, Enter picks the highlighted option and Escape closes —
+  the keys are pushed to `on_key` as `%{"key" => key}`; the parent owns that state too.
+  """
+  def combobox_input(assigns) do
+    ~H"""
+    <div
+      id={"#{@id}-combobox"}
+      class={["relative", @class]}
+      phx-hook=".ComboboxKeys"
+      data-key-event={@on_key}
+      phx-click-away={@on_close}
+    >
+      <.field_shell id={@id} label={@label} hint={@hint} density={@density}>
+        <input
+          type="text"
+          id={@id}
+          name={@name}
+          value={@value}
+          role="combobox"
+          autocomplete="off"
+          aria-expanded={to_string(@open)}
+          aria-controls={"#{@id}-options"}
+          phx-focus={@on_open}
+          class={field_input_classes(@density, [], @input_class)}
+          {@rest}
+        />
+      </.field_shell>
+
+      <div
+        :if={@open}
+        id={"#{@id}-options"}
+        role="listbox"
+        class="absolute right-0 z-30 mt-1 max-h-72 w-72 max-w-[80vw] overflow-y-auto rounded-xl border border-base-300 bg-base-100 py-1 shadow-2xl shadow-black/20"
+      >
+        <p :if={@loading} class="px-3 py-2 text-xs text-base-content/50">Loading models…</p>
+        <p
+          :if={not @loading and @options == []}
+          id={"#{@id}-empty"}
+          class="px-3 py-2 text-xs text-base-content/50"
+        >
+          {@empty_message}
+        </p>
+        <button
+          :for={{option, index} <- Enum.with_index(@options)}
+          type="button"
+          role="option"
+          aria-selected={to_string(index == @highlight)}
+          data-option={option}
+          data-highlighted={index == @highlight}
+          phx-click={@on_select}
+          phx-value-option={option}
+          class={[
+            "block w-full truncate px-3 py-1.5 text-left text-xs",
+            index == @highlight && "bg-base-200 text-base-content",
+            index != @highlight && "text-base-content/70 hover:bg-base-200/60",
+            option == @value && "font-semibold"
+          ]}
+        >
+          {option}
+        </button>
+      </div>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ComboboxKeys">
+        const KEYS = ["ArrowDown", "ArrowUp", "Enter", "Escape"]
+
+        export default {
+          mounted() {
+            this.el.addEventListener("keydown", (event) => {
+              if (!KEYS.includes(event.key)) return
+              event.preventDefault()
+
+              // Keep the input in sync ourselves: LiveView will not patch the value of the
+              // input the user is focused on, and Enter never blurs it.
+              const highlighted = this.el.querySelector("[data-highlighted]")
+              if (event.key === "Enter" && highlighted) {
+                this.el.querySelector("input").value = highlighted.dataset.option
+              }
+
+              this.pushEvent(this.el.dataset.keyEvent, {key: event.key})
+            })
+          },
+          updated() {
+            this.el
+              .querySelector("[data-highlighted]")
+              ?.scrollIntoView({block: "nearest"})
+          }
+        }
+      </script>
+    </div>
+    """
+  end
+
   attr :id, :string, default: nil
   attr :name, :string, default: nil
   attr :label, :string, default: nil

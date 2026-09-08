@@ -3,6 +3,7 @@ defmodule Livellm.TestSupport.FakeLlmRunner do
   Test double for `Livellm.Chats.LlmRunner`.
   """
 
+  alias LlmComposer.Agent.Result, as: AgentResult
   alias LlmComposer.LlmResponse
 
   def run(provider_config, model, history, reasoning_effort, chat_id, opts \\ []) do
@@ -42,7 +43,13 @@ defmodule Livellm.TestSupport.FakeLlmRunner do
         response_id: Map.get(attrs, :response_id, "fake-response")
       }
 
-    {:ok, response}
+    {:ok,
+     %AgentResult{
+       response: response,
+       messages: [main_response],
+       iterations: 1,
+       cost_infos: List.wrap(response.cost_info)
+     }}
   end
 
   defp notify_test_process(provider_config, model, history, reasoning_effort, chat_id, opts) do
