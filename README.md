@@ -65,7 +65,7 @@ This `master` branch keeps the app focused on the simple chat demo. If you want 
 
 Notes:
 
-- Model names are entered manually
+- Models are loaded from the selected provider and can be filtered in the chat header
 - Capability support depends on the selected model and provider behavior
 - The reasoning selector is visible for all providers; only `openai_responses` and `openrouter` currently forward the effort value
 
@@ -116,7 +116,7 @@ Behavior details:
 
 - Chats are persisted in the local database.
 - Assistant messages store normalized metadata: provider name, model, token counts, cached tokens, reasoning tokens, cost, and provider response IDs when available.
-- Per-chat UI settings for provider/model/reasoning/streaming are restored from browser `localStorage`.
+- Streaming mode is restored from browser `localStorage`; provider, model, and reasoning settings are persisted with each chat.
 
 ## Defining New Tools
 
