@@ -20,6 +20,9 @@ config :livellm, LivellmWeb.Endpoint,
 # In test we don't send emails
 config :livellm, Livellm.Mailer, adapter: Swoosh.Adapters.Test
 
+# Never hit a provider's /models endpoint from tests; seed the ETS cache instead
+config :livellm, :fetch_provider_models, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

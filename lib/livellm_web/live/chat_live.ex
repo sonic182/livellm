@@ -8,6 +8,7 @@ defmodule LivellmWeb.ChatLive do
   alias Livellm.Chats
   alias Livellm.Chats.ActiveTasks
   alias Livellm.Config
+  alias Livellm.Models
   alias Livellm.Usage
   alias LlmComposer.Agent.Result, as: AgentResult
   alias LlmComposer.Agent.StreamCollector
@@ -36,6 +37,12 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.empty_chat_metrics())
+     |> assign(:model_list_open, false)
+     |> assign(:model_query, nil)
+     |> assign(:models, [])
+     |> assign(:models_loading, false)
+     |> assign_model_options()
+     |> load_models()
      |> stream(:messages, [])}
   end
 
@@ -80,6 +87,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:streaming_content, nil)
      |> assign(:streaming_reasoning, nil)
      |> assign(:chat_metrics, Usage.aggregate_chat_metrics(messages))
+     |> assign(:model_list_open, false)
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> stream(:messages, messages, reset: true)}
   end
 
@@ -176,18 +185,11 @@ defmodule LivellmWeb.ChatLive do
     stream_mode = params["streaming"] == "true"
 
     socket =
-      if socket.assigns.chat do
-        {:ok, updated_chat} =
-          Chats.update_chat(socket.assigns.chat, %{
-            model: selected_model,
-            reasoning_effort: reasoning_effort,
-            provider_config_id: new_provider_id
-          })
-
-        assign(socket, :chat, updated_chat)
-      else
-        socket
-      end
+      maybe_update_chat(socket, %{
+        model: selected_model,
+        reasoning_effort: reasoning_effort,
+        provider_config_id: new_provider_id
+      })
 
     {:noreply,
      socket
@@ -195,6 +197,8 @@ defmodule LivellmWeb.ChatLive do
      |> assign(:selected_model, selected_model)
      |> assign(:selected_reasoning_effort, reasoning_effort)
      |> assign(:stream_mode, stream_mode)
+     |> put_model_query(params["model"])
+     |> load_models_if_changed(socket.assigns.selected_provider_id)
      |> push_event("save_chat_settings", %{streaming: stream_mode})}
   end
 
@@ -202,6 +206,69 @@ defmodule LivellmWeb.ChatLive do
   def handle_event("restore_chat_settings", params, socket) do
     stream_mode = Map.get(params, "streaming", true) in [true, "true"]
     {:noreply, assign(socket, :stream_mode, stream_mode)}
+  end
+
+  @impl true
+  def handle_event("open_model_list", _params, socket) do
+    # Focusing shows the whole catalog; the query only narrows it once the user types.
+    {:noreply,
+     socket
+     |> assign(:model_list_open, true)
+     |> put_model_query(nil)}
+  end
+
+  @impl true
+  def handle_event("close_model_list", _params, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_event("select_model", %{"option" => model}, socket) do
+    {:noreply, select_model(socket, model)}
+  end
+
+  @impl true
+  def handle_event("model_key", %{"key" => "ArrowDown"}, socket) do
+    if socket.assigns.model_list_open do
+      {:noreply, move_model_highlight(socket, 1)}
+    else
+      # The first ArrowDown opens the list on its first option rather than skipping one.
+      {:noreply,
+       socket
+       |> assign(:model_list_open, true)
+       |> assign(:model_highlight, 0)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "ArrowUp"}, socket) do
+    {:noreply, move_model_highlight(socket, -1)}
+  end
+
+  def handle_event("model_key", %{"key" => "Enter"}, socket) do
+    %{model_options: options, model_highlight: highlight} = socket.assigns
+
+    case Enum.at(options, highlight) do
+      nil -> {:noreply, close_model_list(socket)}
+      model -> {:noreply, select_model(socket, model)}
+    end
+  end
+
+  def handle_event("model_key", %{"key" => "Escape"}, socket) do
+    {:noreply, close_model_list(socket)}
+  end
+
+  @impl true
+  def handle_async(:models, {:ok, models}, socket) do
+    {:noreply,
+     socket
+     |> assign(:models, models)
+     |> assign(:models_loading, false)
+     |> assign_model_options()}
+  end
+
+  def handle_async(:models, {:exit, reason}, socket) do
+    Logger.warning("[chat_live] model catalog fetch crashed: #{inspect(reason)}")
+    {:noreply, assign(socket, :models_loading, false)}
   end
 
   @impl true
@@ -263,6 +330,84 @@ defmodule LivellmWeb.ChatLive do
   # --- Private ---
 
   defp stream_topic(chat_id), do: "chat_stream:#{chat_id}"
+
+  defp put_model_query(socket, query) do
+    socket
+    |> assign(:model_query, query)
+    |> assign_model_options()
+  end
+
+  # The filtered list lives in an assign so Enter and the arrow keys resolve against
+  # exactly what is on screen.
+  defp assign_model_options(socket) do
+    options = Models.filter(socket.assigns.models, socket.assigns.model_query)
+
+    socket
+    |> assign(:model_options, options)
+    |> assign(:model_highlight, 0)
+  end
+
+  defp move_model_highlight(socket, step) do
+    last = length(socket.assigns.model_options) - 1
+    highlight = socket.assigns.model_highlight + step
+
+    assign(socket, :model_highlight, highlight |> max(0) |> min(max(last, 0)))
+  end
+
+  defp close_model_list(socket) do
+    socket
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp select_model(socket, model) do
+    socket
+    |> maybe_update_chat(%{model: model})
+    |> assign(:selected_model, model)
+    |> assign(:model_list_open, false)
+    |> put_model_query(nil)
+  end
+
+  defp maybe_update_chat(%{assigns: %{chat: nil}} = socket, _attrs), do: socket
+
+  defp maybe_update_chat(socket, attrs) do
+    case Chats.update_chat(socket.assigns.chat, attrs) do
+      {:ok, chat} ->
+        assign(socket, :chat, chat)
+
+      # A blank model is transient combobox search state, not something to persist.
+      {:error, _changeset} ->
+        socket
+    end
+  end
+
+  defp load_models_if_changed(socket, previous_provider_id) do
+    if socket.assigns.selected_provider_id == previous_provider_id do
+      socket
+    else
+      load_models(socket)
+    end
+  end
+
+  defp load_models(socket) do
+    case Enum.find(
+           socket.assigns.provider_configs,
+           &(&1.id == socket.assigns.selected_provider_id)
+         ) do
+      nil ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, false)
+        |> assign_model_options()
+
+      config ->
+        socket
+        |> assign(:models, [])
+        |> assign(:models_loading, connected?(socket))
+        |> assign_model_options()
+        |> start_async(:models, fn -> Models.list(config) end)
+    end
+  end
 
   # Recomputed rather than merged: a finished turn can race the `push_patch` that re-aggregates
   # the chat, and merging would then count the same message twice.

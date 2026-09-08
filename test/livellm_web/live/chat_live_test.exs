@@ -104,6 +104,120 @@ defmodule LivellmWeb.ChatLiveTest do
     refute has_element?(view, "#chat-metrics")
   end
 
+  test "the model combobox opens, filters and selects from the provider catalog", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    refute has_element?(view, "#model-input-options")
+
+    view |> element("#model-input") |> render_focus()
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    assert has_element?(view, "#model-input-options button", "o3")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "nano",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input-options button", "gpt-5-nano")
+    refute has_element?(view, "#model-input-options button", "o3")
+
+    view |> element("#model-input-options button", "gpt-5-nano") |> render_click()
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "arrow keys move the model highlight and Enter selects it", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    case Process.whereis(Ets) do
+      nil -> start_supervised!({Ets, []})
+      _pid -> :ok
+    end
+
+    Ets.put("livellm_models:openai:", ["gpt-4.1-mini", "gpt-5-nano", "o3"], 60)
+    _ = :sys.get_state(Process.whereis(Ets))
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
+
+    combobox = element(view, "#model-input-combobox")
+
+    # The list opens on the first ArrowDown, with the first option highlighted.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-4.1-mini\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    # Highlight stops at the last option instead of wrapping.
+    render_hook(combobox, "model_key", %{"key" => "ArrowDown"})
+    assert has_element?(view, "#model-input-options button[data-option=\"o3\"][data-highlighted]")
+
+    render_hook(combobox, "model_key", %{"key" => "ArrowUp"})
+
+    assert has_element?(
+             view,
+             "#model-input-options button[data-option=\"gpt-5-nano\"][data-highlighted]"
+           )
+
+    render_hook(combobox, "model_key", %{"key" => "Enter"})
+
+    assert has_element?(view, "#model-input[value=\"gpt-5-nano\"]")
+    refute has_element?(view, "#model-input-options")
+  end
+
+  test "escape closes the model list without selecting", %{conn: conn} do
+    provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element("#model-input") |> render_focus()
+    assert has_element?(view, "#model-input-options")
+
+    render_hook(element(view, "#model-input-combobox"), "model_key", %{"key" => "Escape"})
+
+    refute has_element?(view, "#model-input-options")
+    assert has_element?(view, "#model-input[value=\"gpt-4.1-mini\"]")
+  end
+
+  test "clearing the model input to search does not crash the chat", %{conn: conn} do
+    provider_config = provider_config_fixture(enabled: true, default_model: "gpt-4.1-mini")
+
+    chat =
+      ChatsFixtures.chat_fixture(%{model: "gpt-4.1-mini", provider_config_id: provider_config.id})
+
+    {:ok, view, _html} = live(conn, ~p"/chats/#{chat.id}")
+
+    render_change(element(view, "#chat-settings-form"), %{
+      "provider_id" => to_string(provider_config.id),
+      "model" => "",
+      "reasoning_effort" => "",
+      "streaming" => "true"
+    })
+
+    assert has_element?(view, "#model-input[value=\"\"]")
+    assert Chats.get_chat!(chat.id).model == "gpt-4.1-mini"
+  end
+
   test "assistant messages render markdown and sanitize raw html", %{conn: conn} do
     chat = ChatsFixtures.chat_fixture()
 
